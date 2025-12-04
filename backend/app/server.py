@@ -1,26 +1,3 @@
-# from fastapi import FastAPI
-# from fastapi.middleware.cors import CORSMiddleware
-# from .api.v1.routes import router as api_router
-# from .core.config import settings
-
-# app = FastAPI(title="DATABank API", version="1.0.0")
-
-# # CORS
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=settings.CORS_ORIGINS,
-#     allow_credentials=True,
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
-
-# app.include_router(api_router, prefix="/api/v1")
-
-
-# @app.get("/")
-# async def root():
-#     return {"message": "DATABank API - healthy"}
-
 """
 Backend API for the E-Mentoring System built with FastAPI and MongoDB.
 Handles user authentication, data management, and socket communication.
@@ -41,6 +18,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Depends, status, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.staticfiles import StaticFiles
+from fastapi import Form
 from jose import JWTError, jwt
 from motor.motor_asyncio import AsyncIOMotorClient
 from passlib.context import CryptContext
@@ -148,7 +127,14 @@ class AssignmentPayload(BaseModel):
     mentor_id: str
     student_ids: List[str]
         
-        
+
+class AttendanceCreate(BaseModel):
+    student_id: str
+    subject: str
+    date: str
+    status: str  # present, absent, leave
+
+
 class AttendanceRecord(BaseModel):
     """Schema for an individual attendance record."""
 
@@ -161,7 +147,7 @@ class AttendanceRecord(BaseModel):
     recorded_by: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-
+    
 class MarksRecord(BaseModel):
     """Schema for an individual marks record."""
 
@@ -175,6 +161,16 @@ class MarksRecord(BaseModel):
     max_marks: float
     recorded_by: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class MarksCreate(BaseModel):
+    """Payload schema for creating marks from API."""
+    student_id: str
+    subject: str
+    semester: int
+    marks_type: str  # IA1, IA2, IA3, Assignment, VTU
+    marks_obtained: float
+    max_marks: float
 
 
 class FeedbackCreate(BaseModel):
@@ -213,8 +209,15 @@ class Circular(BaseModel):
     author_id: str
     title: str
     content: str
+    file_url: Optional[str] = None
     target_audience: str  # all, students, mentors, specific
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class CircularCreate(BaseModel):
+    title: str
+    content: str
+    target_audience: str  # all, students, mentors, specific
 
 
 class Rating(BaseModel):
@@ -614,19 +617,33 @@ async def get_student_mentor(
 # Attendance Routes
 @app.post("/api/attendance")
 async def create_attendance(
-    record: AttendanceRecord, current_user: dict = Depends(get_current_user)
-):  # E501 fix
-    """Creates a single attendance record."""
+    payload: AttendanceCreate,
+    current_user: dict = Depends(get_current_user),
+):
+    """Creates a single attendance record (Admin or Mentor)."""
     if current_user["role"] not in ["admin", "mentor"]:
         raise HTTPException(status_code=403, detail="Not authorized")
 
-    record.recorded_by = current_user["id"]
-    record_data = record.model_dump()
+    # Build full AttendanceRecord from light payload
+    record = AttendanceRecord(
+        student_id=payload.student_id,
+        subject=payload.subject,
+        date=payload.date,
+        status=payload.status,
+        recorded_by=current_user["id"],
+    )
+
+    # Pydantic v1: use dict()
+    record_data = record.dict()
     record_data["created_at"] = record_data["created_at"].isoformat()
 
-    await db.attendance.insert_one(record_data)
-    return record_data
+    result = await db.attendance.insert_one(record_data)
 
+    # Avoid ObjectId issues
+    record_data["mongo_id"] = str(result.inserted_id)
+    record_data.pop("_id", None)
+
+    return record_data
 
 @app.post("/api/attendance/upload")
 async def upload_attendance(
@@ -679,27 +696,61 @@ async def get_student_attendance(
     return records
 
 
-# Marks Routes
+
 @app.post("/api/marks")
 async def create_marks(
-    record: MarksRecord, current_user: dict = Depends(get_current_user)
-):  # E501 fix
-    """Creates a single marks record."""
+    payload: MarksCreate,
+    current_user: dict = Depends(get_current_user),
+):
+    """Creates a single marks record (Admin or Mentor)."""
     if current_user["role"] not in ["admin", "mentor"]:
         raise HTTPException(status_code=403, detail="Not authorized")
 
-    record.recorded_by = current_user["id"]
-    record_data = record.model_dump()
+    # Build full MarksRecord from the light payload
+    record = MarksRecord(
+        student_id=payload.student_id,
+        subject=payload.subject,
+        semester=payload.semester,
+        marks_type=payload.marks_type,
+        marks_obtained=payload.marks_obtained,
+        max_marks=payload.max_marks,
+        recorded_by=current_user["id"],
+    )
+
+    # Pydantic v1 style
+    record_data = record.dict()
     record_data["created_at"] = record_data["created_at"].isoformat()
 
-    await db.marks.insert_one(record_data)
+    result = await db.marks.insert_one(record_data)
+
+    # Avoid returning raw ObjectId
+    record_data["mongo_id"] = str(result.inserted_id)
+    record_data.pop("_id", None)
+
     return record_data
 
 
+# @app.get("/api/marks/student/{student_id}")
+# async def get_student_marks(student_id: str, current_user: dict = Depends(get_current_user)):
+#     if current_user["role"] not in ["admin", "mentor", "student"]:
+#         raise HTTPException(status_code=403, detail="Not authorized")
+
+#     if current_user["role"] == "student" and current_user["id"] != student_id:
+#         raise HTTPException(status_code=403, detail="Cannot view other students marks")
+
+#     marks = []
+#     async for doc in db.marks.find({"student_id": student_id}):
+#         doc["id"] = str(doc["_id"])
+#         doc.pop("_id")
+#         marks.append(doc)
+
+#     return marks
+
 @app.post("/api/marks/upload")
 async def upload_marks(
-    file: UploadFile = File(...), current_user: dict = Depends(get_current_user)
-):  # E501 fix
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+):
     """Uploads marks records from a CSV or Excel file."""
     if current_user["role"] not in ["admin", "mentor"]:
         raise HTTPException(status_code=403, detail="Not authorized")
@@ -709,14 +760,14 @@ async def upload_marks(
         pd.read_csv(io.BytesIO(contents))
         if file.filename.endswith(".csv")
         else pd.read_excel(io.BytesIO(contents))
-    )  # E501 fix
+    )
 
     # Expected columns: student_usn, subject, semester, marks_type, marks_obtained, max_marks
-    records = []
+    records: List[dict] = []
     for _, row in df.iterrows():
         student = await db.users.find_one(
             {"usn": row["student_usn"], "role": "student"}, {"_id": 0}
-        )  # E501 fix
+        )
         if student:
             record = MarksRecord(
                 student_id=student["id"],
@@ -727,7 +778,7 @@ async def upload_marks(
                 max_marks=float(row["max_marks"]),
                 recorded_by=current_user["id"],
             )
-            record_data = record.model_dump()
+            record_data = record.dict()
             record_data["created_at"] = record_data["created_at"].isoformat()
             records.append(record_data)
 
@@ -735,7 +786,6 @@ async def upload_marks(
         await db.marks.insert_many(records)
 
     return {"message": f"Uploaded {len(records)} marks records"}
-
 
 @app.get("/api/marks/student/{student_id}")
 async def get_student_marks(
@@ -866,20 +916,50 @@ async def get_conversations(current_user: dict = Depends(get_current_user)):
 
 
 # Circulars Routes
+from typing import Optional
+
 @app.post("/api/circulars")
 async def create_circular(
-    circular: Circular, current_user: dict = Depends(get_current_user)
+    title: str = Form(...),
+    content: str = Form(...),
+    target_audience: str = Form(...),
+    file: Optional[UploadFile] = File(None),
+    current_user: dict = Depends(get_current_user),
 ):
-    """Creates a new circular (Admin or Mentor only)."""
     if current_user["role"] not in ["admin", "mentor"]:
         raise HTTPException(status_code=403, detail="Not authorized")
 
-    circular.author_id = current_user["id"]
-    circular_data = circular.model_dump()
-    circular_data["created_at"] = circular_data["created_at"].isoformat()
+    file_url = None
 
-    await db.circulars.insert_one(circular_data)
-    return circular_data
+    if file:
+        folder = "app/uploads/circulars"
+        os.makedirs(folder, exist_ok=True)
+        filename = f"{uuid.uuid4()}_{file.filename}"
+        filepath = f"{folder}/{filename}"
+
+        with open(filepath, "wb") as buffer:
+            buffer.write(await file.read())
+
+        file_url = f"/uploads/circulars/{filename}"
+
+    circular = Circular(
+        author_id=current_user["id"],
+        title=title,
+        content=content,
+        target_audience=target_audience,
+        file_url=file_url,
+    )
+
+    data = circular.model_dump()
+    data["created_at"] = data["created_at"].isoformat()
+
+    result = await db.circulars.insert_one(data)
+
+    # 🔑 IMPORTANT: remove Mongo's ObjectId before returning
+    data.pop("_id", None)
+    data["mongo_id"] = str(result.inserted_id)
+
+    return data
 
 
 @app.get("/api/circulars")
@@ -956,6 +1036,70 @@ async def get_admin_stats(current_user: dict = Depends(get_current_user)):
         "total_circulars": total_circulars,
         "total_assignments": total_assignments,
     }
+    
+@app.get("/api/stats/admin/mentor-load")
+async def get_admin_mentor_load(current_user: dict = Depends(get_current_user)):
+    """
+    Returns, for each mentor, how many students are assigned.
+    Used for admin analytics charts.
+    """
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    # Get all assignments
+    assignments = await db.assignments.find({}, {"_id": 0}).to_list(1000)
+
+    if not assignments:
+        return []
+
+    mentor_ids = list({a["mentor_id"] for a in assignments})
+
+    # Get mentor names
+    mentors = await db.users.find(
+        {"id": {"$in": mentor_ids}},
+        {"_id": 0, "id": 1, "full_name": 0, "email": 1, "full_name": 1},
+    ).to_list(1000)
+
+    mentor_map = {m["id"]: m.get("full_name") or m.get("email") for m in mentors}
+
+    data = []
+    for a in assignments:
+        mid = a["mentor_id"]
+        student_count = len(a.get("student_ids", []))
+        data.append(
+            {
+                "mentor_id": mid,
+                "mentor_name": mentor_map.get(mid, "Unknown mentor"),
+                "student_count": student_count,
+            }
+        )
+
+    return data
+
+@app.get("/api/stats/admin/students-by-department")
+async def get_admin_students_by_department(
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Returns number of students per department for analytics.
+    """
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    students = await db.users.find(
+        {"role": "student"}, {"_id": 0, "department": 1}
+    ).to_list(5000)
+
+    counts = {}
+    for s in students:
+        dept = s.get("department") or "Unknown"
+        counts[dept] = counts.get(dept, 0) + 1
+
+    # Convert to list for charts
+    return [
+        {"department": dept, "count": count}
+        for dept, count in sorted(counts.items(), key=lambda x: x[0])
+    ]
 
 
 @app.get("/api/stats/mentor")
@@ -975,6 +1119,104 @@ async def get_mentor_stats(current_user: dict = Depends(get_current_user)):
 
     return {"assigned_students": assigned_students, "total_feedback": total_feedback}
 
+@app.get("/api/stats/mentor/mentees-performance")
+async def get_mentor_mentees_performance(
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    For the logged-in mentor, returns performance summary for each mentee:
+    - attendance percentage
+    - average marks percentage
+    - simple risk level
+    """
+    if current_user["role"] != "mentor":
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    # Find students assigned to this mentor
+    assignment = await db.assignments.find_one(
+        {"mentor_id": current_user["id"]}, {"_id": 0}
+    )
+    if not assignment or not assignment.get("student_ids"):
+        return []
+
+    student_ids = assignment["student_ids"]
+
+    # Get basic student info
+    students = await db.users.find(
+        {"id": {"$in": student_ids}},
+        {"_id": 0, "password_hash": 0},
+    ).to_list(1000)
+
+    # Attendance for these students
+    attendance_records = await db.attendance.find(
+        {"student_id": {"$in": student_ids}}, {"_id": 0}
+    ).to_list(10000)
+
+    attendance_stats = {}  # student_id -> {"present": x, "total": y}
+    for r in attendance_records:
+        sid = r["student_id"]
+        if sid not in attendance_stats:
+            attendance_stats[sid] = {"present": 0, "total": 0}
+        attendance_stats[sid]["total"] += 1
+        if r["status"] == "present":
+            attendance_stats[sid]["present"] += 1
+
+    # Marks for these students
+    marks_records = await db.marks.find(
+        {"student_id": {"$in": student_ids}}, {"_id": 0}
+    ).to_list(10000)
+
+    marks_stats = {}  # student_id -> {"sum_pct": x, "count": y}
+    for r in marks_records:
+        sid = r["student_id"]
+        if r.get("max_marks") in (0, None):
+            continue
+        pct = (float(r["marks_obtained"]) / float(r["max_marks"])) * 100.0
+        if sid not in marks_stats:
+            marks_stats[sid] = {"sum_pct": 0.0, "count": 0}
+        marks_stats[sid]["sum_pct"] += pct
+        marks_stats[sid]["count"] += 1
+
+    results = []
+    for s in students:
+        sid = s["id"]
+
+        # Attendance %
+        att = attendance_stats.get(sid, {"present": 0, "total": 0})
+        if att["total"] > 0:
+            attendance_pct = round(att["present"] / att["total"] * 100, 2)
+        else:
+            attendance_pct = 0.0
+
+        # Marks %
+        mk = marks_stats.get(sid, {"sum_pct": 0.0, "count": 0})
+        if mk["count"] > 0:
+            marks_pct = round(mk["sum_pct"] / mk["count"], 2)
+        else:
+            marks_pct = 0.0
+
+        # Very simple risk logic
+        if attendance_pct < 60 or marks_pct < 40:
+            risk = "high"
+        elif attendance_pct < 75 or marks_pct < 50:
+            risk = "medium"
+        else:
+            risk = "low"
+
+        results.append(
+            {
+                "student_id": sid,
+                "full_name": s.get("full_name"),
+                "usn": s.get("usn"),
+                "department": s.get("department"),
+                "semester": s.get("semester"),
+                "attendance_percentage": attendance_pct,
+                "average_marks_percentage": marks_pct,
+                "risk_level": risk,
+            }
+        )
+
+    return results
 
 @app.get("/api/stats/student")
 async def get_student_stats(current_user: dict = Depends(get_current_user)):
@@ -1014,3 +1256,6 @@ async def get_student_stats(current_user: dict = Depends(get_current_user)):
 async def shutdown_db_client():
     """Closes the MongoDB client connection on application shutdown."""
     client.close()
+
+
+app.mount("/uploads", StaticFiles(directory="app/uploads"), name="uploads")

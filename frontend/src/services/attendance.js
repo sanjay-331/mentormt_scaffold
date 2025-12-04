@@ -17,6 +17,13 @@ export async function uploadAttendance(file) {
   return res.data;
 }
 
+// Create a single manual attendance record
+// payload: { student_id, subject, date, status }
+export async function createAttendanceRecord(payload) {
+  const res = await api.post("/api/attendance", payload);
+  return res.data;
+}
+
 // Get all attendance records for a student
 export async function getStudentAttendance(studentId) {
   const res = await api.get(`/api/attendance/student/${studentId}`);
