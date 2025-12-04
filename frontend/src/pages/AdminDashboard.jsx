@@ -9,12 +9,13 @@ import {
   updateUser,
   deleteUser,
 } from "../services/users";
+import { saveAssignment } from "../services/assignments";
 
 export default function AdminDashboard() {
   const { user, logout } = useAuth();
   const [stats, setStats] = useState(null);
   const [loadingStats, setLoadingStats] = useState(true);
-  const [activeTab, setActiveTab] = useState("overview"); // "overview" | "users"
+  const [activeTab, setActiveTab] = useState("overview"); // "overview" | "users" | "assignments"
 
   // Load admin stats
   useEffect(() => {
@@ -83,6 +84,12 @@ export default function AdminDashboard() {
             >
               Users
             </TabButton>
+            <TabButton
+              active={activeTab === "assignments"}
+              onClick={() => setActiveTab("assignments")}
+            >
+              Assignments
+            </TabButton>
           </nav>
         </div>
 
@@ -109,6 +116,8 @@ export default function AdminDashboard() {
         )}
 
         {activeTab === "users" && <AdminUserManagement />}
+
+        {activeTab === "assignments" && <AdminAssignments />}
       </main>
     </div>
   );
@@ -143,7 +152,7 @@ function StatCard({ label, value }) {
   );
 }
 
-/* ----------------- Admin User Management ----------------- */
+/* ----------------- Admin User Management (unchanged) ----------------- */
 
 function AdminUserManagement() {
   const [roleFilter, setRoleFilter] = useState("all");
@@ -410,7 +419,7 @@ function AdminUserManagement() {
         </form>
       </div>
 
-      {/* Users table */}
+      {/* Users table (same as before) */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4">
         <h4 className="text-sm font-semibold text-slate-800 mb-3">
           Users ({users.length})
@@ -570,6 +579,199 @@ function AdminUserManagement() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/* ----------------- Admin Assignments ----------------- */
+
+function AdminAssignments() {
+  const [mentors, setMentors] = useState([]);
+  const [students, setStudents] = useState([]);
+  const [selectedMentor, setSelectedMentor] = useState("");
+  const [selectedStudentIds, setSelectedStudentIds] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  // Load mentors & students
+  useEffect(() => {
+    async function load() {
+      setLoading(true);
+      setError("");
+      try {
+        const [mentorsData, studentsData] = await Promise.all([
+          fetchUsers("mentor"),
+          fetchUsers("student"),
+        ]);
+        setMentors(mentorsData);
+        setStudents(studentsData);
+      } catch (e) {
+        console.error("Failed to load mentors/students", e);
+        setError("Failed to load mentors or students.");
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
+  }, []);
+
+  const toggleStudent = (id) => {
+    setSelectedStudentIds((prev) =>
+      prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]
+    );
+  };
+
+  const handleSave = async () => {
+    if (!selectedMentor) {
+      setError("Select a mentor first.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    setMessage("");
+    try {
+      await saveAssignment(selectedMentor, selectedStudentIds);
+      setMessage("Assignment saved successfully.");
+    } catch (e) {
+      console.error("Failed to save assignment", e);
+      const detail = e?.response?.data?.detail;
+      setError(
+        typeof detail === "string"
+          ? detail
+          : "Failed to save assignment. Please try again."
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-800">
+            Mentor–Student Assignments
+          </h3>
+          <p className="text-xs text-slate-500">
+            Choose a mentor and assign students to them. Saving will replace any
+            existing assignment for that mentor.
+          </p>
+        </div>
+      </div>
+
+      {error && (
+        <div className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl px-3 py-2">
+          {error}
+        </div>
+      )}
+      {message && (
+        <div className="text-sm text-teal-700 bg-teal-50 border border-teal-100 rounded-xl px-3 py-2">
+          {message}
+        </div>
+      )}
+
+      {loading ? (
+        <div className="text-sm text-slate-500">Loading mentors and students…</div>
+      ) : (
+        <div className="grid md:grid-cols-[1fr,2fr] gap-4">
+          {/* Mentor selector */}
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4">
+            <h4 className="text-sm font-semibold text-slate-800 mb-3">
+              Select mentor
+            </h4>
+            <select
+              value={selectedMentor}
+              onChange={(e) => setSelectedMentor(e.target.value)}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-teal-500 bg-white"
+            >
+              <option value="">-- Choose mentor --</option>
+              {mentors.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.full_name} ({m.email})
+                </option>
+              ))}
+            </select>
+            <p className="mt-2 text-xs text-slate-500">
+              All selected students on the right will be assigned to this mentor.
+            </p>
+          </div>
+
+          {/* Students list */}
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-sm font-semibold text-slate-800">
+                Students ({students.length})
+              </h4>
+              <button
+                type="button"
+                onClick={() => setSelectedStudentIds(students.map((s) => s.id))}
+                className="text-xs text-teal-600 hover:text-teal-700"
+              >
+                Select all
+              </button>
+            </div>
+
+            {students.length === 0 ? (
+              <div className="text-sm text-slate-500">No students found.</div>
+            ) : (
+              <div className="max-h-80 overflow-y-auto pr-1">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-left text-[11px] text-slate-500 border-b border-slate-100">
+                      <th className="py-1 pr-2">Assign</th>
+                      <th className="py-1 pr-2">Name</th>
+                      <th className="py-1 pr-2">USN</th>
+                      <th className="py-1 pr-2">Dept</th>
+                      <th className="py-1 pr-2">Sem</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {students.map((s) => (
+                      <tr
+                        key={s.id}
+                        className="border-b border-slate-50 last:border-0"
+                      >
+                        <td className="py-1 pr-2">
+                          <input
+                            type="checkbox"
+                            checked={selectedStudentIds.includes(s.id)}
+                            onChange={() => toggleStudent(s.id)}
+                          />
+                        </td>
+                        <td className="py-1 pr-2 text-slate-800">
+                          {s.full_name}
+                        </td>
+                        <td className="py-1 pr-2 text-slate-600">
+                          {s.usn || "-"}
+                        </td>
+                        <td className="py-1 pr-2 text-slate-600">
+                          {s.department || "-"}
+                        </td>
+                        <td className="py-1 pr-2 text-slate-600">
+                          {s.semester ?? "-"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div className="mt-3 flex justify-end">
+              <button
+                type="button"
+                disabled={saving}
+                onClick={handleSave}
+                className="inline-flex items-center rounded-lg bg-gradient-to-r from-teal-500 to-blue-600 px-4 py-1.5 text-xs font-medium text-white shadow hover:from-teal-600 hover:to-blue-700 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {saving ? "Saving..." : "Save assignment"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

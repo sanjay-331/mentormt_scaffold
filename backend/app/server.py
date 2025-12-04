@@ -72,13 +72,26 @@ sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
 app = FastAPI(title="Student Mentor-Mentee System")
 socket_app = socketio.ASGIApp(sio, app)
 
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
+from fastapi.middleware.cors import CORSMiddleware
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -119,8 +132,8 @@ class Token(BaseModel):
     access_token: str
     token_type: str
     user: Dict[str, Any]
-
-
+    
+   
 class MentorAssignment(BaseModel):
     """Schema for mentor-student assignment records."""
 
@@ -129,8 +142,13 @@ class MentorAssignment(BaseModel):
     mentor_id: str
     student_ids: List[str]
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-
+    
+    
+class AssignmentPayload(BaseModel):
+    mentor_id: str
+    student_ids: List[str]
+        
+        
 class AttendanceRecord(BaseModel):
     """Schema for an individual attendance record."""
 
@@ -157,6 +175,11 @@ class MarksRecord(BaseModel):
     max_marks: float
     recorded_by: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class FeedbackCreate(BaseModel):
+    student_id: str
+    feedback_text: str
 
 
 class Feedback(BaseModel):
@@ -207,7 +230,10 @@ class Rating(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
-# ==================== Auth Helper Functions ====================
+def remove_mongo_id(doc):
+    if doc and "_id" in doc:
+        doc["_id"] = str(doc["_id"])
+    return doc
 
 
 def verify_password(plain_password, hashed_password):
@@ -496,27 +522,58 @@ async def delete_user(
     return {"message": "User deleted successfully"}
 
 
-# Mentor Assignment Routes
+# # Mentor Assignment Routes
+# @app.post("/api/assignments")
+# async def create_assignment(
+#     payload: AssignmentPayload,
+#     current_user: dict = Depends(get_current_user),
+# ):
+#     """Creates a new mentor assignment (Admin only)."""
+#     if current_user["role"] != "admin":
+#         raise HTTPException(status_code=403, detail="Not authorized")
+
+#     mentor_id = payload.mentor_id
+#     student_ids = payload.student_ids
+
+#     # Remove existing assignment for this mentor
+#     await db.assignments.delete_many({"mentor_id": mentor_id})
+
+#     assignment = MentorAssignment(mentor_id=mentor_id, student_ids=student_ids)
+#     assignment_data = assignment.model_dump()
+#     assignment_data["created_at"] = assignment_data["created_at"].isoformat()
+
+#     await db.assignments.insert_one(assignment_data)
+#     return assignment_data
 @app.post("/api/assignments")
 async def create_assignment(
-    mentor_id: str,
-    student_ids: List[str],
+    payload: AssignmentPayload,
     current_user: dict = Depends(get_current_user),
-):  # E501 fix
+):
     """Creates a new mentor assignment (Admin only)."""
     if current_user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Not authorized")
 
+    mentor_id = payload.mentor_id
+    student_ids = payload.student_ids
+
     # Remove existing assignment for this mentor
     await db.assignments.delete_many({"mentor_id": mentor_id})
 
+    # Build assignment using Pydantic model
     assignment = MentorAssignment(mentor_id=mentor_id, student_ids=student_ids)
-    assignment_data = assignment.model_dump()
+    assignment_data = assignment.dict()
     assignment_data["created_at"] = assignment_data["created_at"].isoformat()
 
-    await db.assignments.insert_one(assignment_data)
-    return assignment_data
+    # Insert into MongoDB
+    result = await db.assignments.insert_one(assignment_data)
 
+    # Add string version of MongoDB ObjectId if needed
+    assignment_data["mongo_id"] = str(result.inserted_id)
+
+    # SAFETY: Remove raw ObjectId and DB _id if present
+    assignment_data.pop("_id", None)
+
+    return assignment_data
 
 @app.get("/api/assignments/mentor/{mentor_id}")
 async def get_mentor_students(
@@ -689,20 +746,46 @@ async def get_student_marks(
     return records
 
 
-# Feedback Routes
+# # Feedback Routes
+# @app.post("/api/feedback")
+# async def create_feedback(
+#     feedback: Feedback, current_user: dict = Depends(get_current_user)
+# ):  # E501 fix
+#     """Creates a new feedback record (Mentor only)."""
+#     if current_user["role"] not in ["admin", "mentor"]:
+#         raise HTTPException(status_code=403, detail="Not authorized")
+
+#     feedback.mentor_id = current_user["id"]
+#     feedback_data = feedback.model_dump()
+#     feedback_data["created_at"] = feedback_data["created_at"].isoformat()
+
+#     await db.feedback.insert_one(feedback_data)
+#     return feedback_data
 @app.post("/api/feedback")
 async def create_feedback(
-    feedback: Feedback, current_user: dict = Depends(get_current_user)
-):  # E501 fix
-    """Creates a new feedback record (Mentor only)."""
+    payload: FeedbackCreate,
+    current_user: dict = Depends(get_current_user),
+):
+    """Creates a new feedback record (Mentor or Admin)."""
     if current_user["role"] not in ["admin", "mentor"]:
         raise HTTPException(status_code=403, detail="Not authorized")
 
-    feedback.mentor_id = current_user["id"]
+    # Build full Feedback object, mentor_id comes from token
+    feedback = Feedback(
+      mentor_id=current_user["id"],
+      student_id=payload.student_id,
+      feedback_text=payload.feedback_text,
+    )
+
     feedback_data = feedback.model_dump()
     feedback_data["created_at"] = feedback_data["created_at"].isoformat()
 
-    await db.feedback.insert_one(feedback_data)
+    result = await db.feedback.insert_one(feedback_data)
+
+    # Avoid ObjectId issues in response
+    feedback_data["mongo_id"] = str(result.inserted_id)
+    feedback_data.pop("_id", None)
+
     return feedback_data
 
 
