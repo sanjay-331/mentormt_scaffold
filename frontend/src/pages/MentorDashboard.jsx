@@ -8,12 +8,13 @@ import {
   createFeedback,
   getFeedbackForStudent,
 } from "../services/feedback";
+import { uploadAttendance } from "../services/attendance";
 
 export default function MentorDashboard() {
   const { user, logout } = useAuth();
   const [stats, setStats] = useState(null);
   const [loadingStats, setLoadingStats] = useState(true);
-  const [activeTab, setActiveTab] = useState("overview"); // "overview" | "students"
+  const [activeTab, setActiveTab] = useState("overview"); // "overview" | "students" | "attendance"
 
   // Load mentor stats
   useEffect(() => {
@@ -63,7 +64,7 @@ export default function MentorDashboard() {
         <div className="rounded-2xl bg-gradient-to-r from-teal-500 via-sky-500 to-blue-600 text-white p-6 shadow-lg">
           <h2 className="text-xl font-semibold mb-1">Hello Mentor 👋</h2>
           <p className="text-sm text-teal-50">
-            Track your assigned students and share feedback with them.
+            Track your assigned students, upload attendance and share feedback.
           </p>
         </div>
 
@@ -81,6 +82,12 @@ export default function MentorDashboard() {
               onClick={() => setActiveTab("students")}
             >
               My Students
+            </TabButton>
+            <TabButton
+              active={activeTab === "attendance"}
+              onClick={() => setActiveTab("attendance")}
+            >
+              Attendance Upload
             </TabButton>
           </nav>
         </div>
@@ -100,6 +107,8 @@ export default function MentorDashboard() {
         )}
 
         {activeTab === "students" && <MentorStudents />}
+
+        {activeTab === "attendance" && <MentorAttendanceUpload />}
       </main>
     </div>
   );
@@ -132,7 +141,97 @@ function StatCard({ label, value }) {
   );
 }
 
-/* ----------------- My Students + Feedback ----------------- */
+/* ----------------- Attendance Upload ----------------- */
+
+function MentorAttendanceUpload() {
+  const [file, setFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  const handleFileChange = (e) => {
+    setFile(e.target.files?.[0] || null);
+    setMessage("");
+    setError("");
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!file) {
+      setError("Please choose a CSV or Excel file.");
+      return;
+    }
+    setUploading(true);
+    setMessage("");
+    setError("");
+    try {
+      const res = await uploadAttendance(file);
+      setMessage(res?.message || "Attendance uploaded successfully.");
+    } catch (e) {
+      console.error("Failed to upload attendance", e);
+      const detail = e?.response?.data?.detail;
+      setError(
+        typeof detail === "string"
+          ? detail
+          : "Failed to upload attendance. Check file format and try again."
+      );
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4 space-y-4">
+      <div>
+        <h3 className="text-sm font-semibold text-slate-800">
+          Upload Attendance
+        </h3>
+        <p className="text-xs text-slate-500 mt-1">
+          Upload a CSV or Excel file with columns:{" "}
+          <span className="font-mono">
+            student_usn, subject, date, status
+          </span>
+          . Status should be one of: <span className="font-mono">present</span>,{" "}
+          <span className="font-mono">absent</span>,{" "}
+          <span className="font-mono">leave</span>.
+        </p>
+      </div>
+
+      {error && (
+        <div className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl px-3 py-2">
+          {error}
+        </div>
+      )}
+      {message && (
+        <div className="text-sm text-teal-700 bg-teal-50 border border-teal-100 rounded-xl px-3 py-2">
+          {message}
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} className="space-y-3">
+        <div>
+          <input
+            type="file"
+            accept=".csv, application/vnd.ms-excel, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            onChange={handleFileChange}
+            className="block w-full text-sm text-slate-700 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-teal-50 file:text-teal-700 hover:file:bg-teal-100"
+          />
+        </div>
+        <div className="flex justify-end">
+          <button
+            type="submit"
+            disabled={uploading}
+            className="inline-flex items-center rounded-lg bg-gradient-to-r from-teal-500 to-blue-600 px-4 py-1.5 text-xs font-medium text-white shadow hover:from-teal-600 hover:to-blue-700 disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {uploading ? "Uploading..." : "Upload attendance"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/* ----------------- My Students + Feedback (same as before) ----------------- */
 
 function MentorStudents() {
   const { user } = useAuth();
@@ -193,7 +292,10 @@ function MentorStudents() {
     setSubmittingFeedback(true);
     setError("");
     try {
-      const created = await createFeedback(selectedStudent.id, newFeedback.trim());
+      const created = await createFeedback(
+        selectedStudent.id,
+        newFeedback.trim()
+      );
       setNewFeedback("");
       // append new feedback to list
       setFeedbackList((prev) => [created, ...prev]);
