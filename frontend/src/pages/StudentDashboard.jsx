@@ -111,33 +111,38 @@ export default function StudentDashboard() {
           </nav>
         </div>
 
-        {/* Overview with quick stats */}
+        {/* Overview with quick stats + alerts */}
         {activeTab === "overview" && (
-          <div className="grid gap-4 md:grid-cols-3">
-            <InfoCard
-              label="Attendance %"
-              value={
-                stats?.attendance_percentage != null
-                  ? `${stats.attendance_percentage}%`
-                  : loadingStats
-                  ? "…"
-                  : "0%"
-              }
-            />
-            <InfoCard
-              label="Average Marks %"
-              value={
-                stats?.average_marks_percentage != null
-                  ? `${stats.average_marks_percentage}%`
-                  : loadingStats
-                  ? "…"
-                  : "0%"
-              }
-            />
-            <InfoCard
-              label="Subjects"
-              value={stats?.total_subjects ?? (loadingStats ? "…" : 0)}
-            />
+          <div className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-3">
+              <InfoCard
+                label="Attendance %"
+                value={
+                  stats?.attendance_percentage != null
+                    ? `${stats.attendance_percentage}%`
+                    : loadingStats
+                    ? "…"
+                    : "0%"
+                }
+              />
+              <InfoCard
+                label="Average Marks %"
+                value={
+                  stats?.average_marks_percentage != null
+                    ? `${stats.average_marks_percentage}%`
+                    : loadingStats
+                    ? "…"
+                    : "0%"
+                }
+              />
+              <InfoCard
+                label="Subjects"
+                value={stats?.total_subjects ?? (loadingStats ? "…" : 0)}
+              />
+            </div>
+
+            {/* 🔔 Smart alerts */}
+            <StudentAlerts stats={stats} loading={loadingStats} />
           </div>
         )}
 
@@ -174,6 +179,117 @@ function InfoCard({ label, value }) {
         {label}
       </div>
       <div className="text-2xl font-semibold text-slate-800">{value}</div>
+    </div>
+  );
+}
+
+/* --------------- Student Alerts (Smart) --------------- */
+
+function StudentAlerts({ stats, loading }) {
+  if (loading) {
+    return (
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4 text-sm text-slate-500">
+        Analysing your attendance and marks…
+      </div>
+    );
+  }
+
+  if (!stats) {
+    return (
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4 text-sm text-slate-500">
+        No data available yet. Once your attendance and marks are uploaded,
+        alerts will appear here.
+      </div>
+    );
+  }
+
+  const alerts = [];
+
+  const att = stats.attendance_percentage ?? 0;
+  const marks = stats.average_marks_percentage ?? 0;
+
+  // Attendance alerts
+  if (att < 60) {
+    alerts.push({
+      level: "critical",
+      title: "Very low attendance",
+      message:
+        "Your attendance is below 60%. You are at risk of losing eligibility. Please talk to your mentor immediately.",
+    });
+  } else if (att < 75) {
+    alerts.push({
+      level: "warning",
+      title: "Attendance below recommended level",
+      message:
+        "Your attendance is below 75%. Try to attend more classes to avoid issues at the end of the semester.",
+    });
+  }
+
+  // Marks alerts
+  if (marks < 40) {
+    alerts.push({
+      level: "critical",
+      title: "Very low marks",
+      message:
+        "Your average marks are below 40%. Focus on weak subjects and seek help from your mentor/faculty.",
+    });
+  } else if (marks < 50) {
+    alerts.push({
+      level: "warning",
+      title: "Marks need improvement",
+      message:
+        "Your average marks are below 50%. You still have time to improve before final exams.",
+    });
+  }
+
+  if (alerts.length === 0) {
+    alerts.push({
+      level: "info",
+      title: "You are doing well 🎉",
+      message:
+        "Your attendance and marks are in a healthy range. Keep maintaining your performance!",
+    });
+  }
+
+  const levelStyles = {
+    critical:
+      "border-red-200 bg-red-50 text-red-800 before:bg-red-400 before:shadow-red-300",
+    warning:
+      "border-amber-200 bg-amber-50 text-amber-800 before:bg-amber-400 before:shadow-amber-300",
+    info:
+      "border-emerald-200 bg-emerald-50 text-emerald-800 before:bg-emerald-400 before:shadow-emerald-300",
+  };
+
+  const levelLabel = {
+    critical: "CRITICAL",
+    warning: "WARNING",
+    info: "GOOD",
+  };
+
+  return (
+    <div className="bg-transparent">
+      <h3 className="text-sm font-semibold text-slate-800 mb-2">
+        Smart alerts
+      </h3>
+      <div className="space-y-2">
+        {alerts.map((a, idx) => (
+          <div
+            key={idx}
+            className={`relative pl-3 pr-3 py-2 rounded-2xl border text-sm flex flex-col gap-1 overflow-hidden before:absolute before:left-2 before:top-1/2 before:-translate-y-1/2 before:w-1 before:h-8 before:rounded-full before:shadow-sm ${levelStyles[a.level]}`}
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold uppercase tracking-wide opacity-80">
+                {levelLabel[a.level]}
+              </span>
+              <span className="text-xs opacity-60">
+                Att: {att}% • Marks: {marks}%
+              </span>
+            </div>
+            <div className="font-semibold text-[13px]">{a.title}</div>
+            <div className="text-[12px] opacity-90">{a.message}</div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -396,7 +512,12 @@ function StudentMarksDetails() {
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="label" angle={-30} textAnchor="end" height={60} />
+                <XAxis
+                  dataKey="label"
+                  angle={-30}
+                  textAnchor="end"
+                  height={60}
+                />
                 <YAxis domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
                 <Tooltip formatter={(v) => `${v}%`} />
                 <Legend />

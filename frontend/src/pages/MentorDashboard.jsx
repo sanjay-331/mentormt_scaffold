@@ -154,6 +154,7 @@ export default function MentorDashboard() {
     </div>
   );
 }
+
 function MentorPerformance() {
   const { user } = useAuth();
   const [mentees, setMentees] = useState([]);
@@ -184,16 +185,38 @@ function MentorPerformance() {
     marks: m.average_marks_percentage ?? 0,
   }));
 
+  const highCount = mentees.filter((m) => m.risk_level === "high").length;
+  const medCount = mentees.filter((m) => m.risk_level === "medium").length;
+  const lowCount = mentees.filter((m) => m.risk_level === "low").length;
+
   return (
     <div className="space-y-6">
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4">
-        <h3 className="text-sm font-semibold text-slate-800 mb-1">
+      {/* Header card + alert summary */}
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4 space-y-2">
+        <h3 className="text-sm font-semibold text-slate-800">
           Mentee performance overview
         </h3>
         <p className="text-xs text-slate-500">
           Compare attendance and marks of all your mentees. Students in the red
           zone may need extra support.
         </p>
+
+        {!loading && mentees.length > 0 && (
+          <div className="flex flex-wrap gap-2 text-[11px]">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-50 text-red-700 border border-red-100">
+              <span className="w-2 h-2 rounded-full bg-red-500" />
+              {highCount} high-risk mentee{highCount === 1 ? "" : "s"}
+            </span>
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-100">
+              <span className="w-2 h-2 rounded-full bg-amber-400" />
+              {medCount} medium-risk
+            </span>
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100">
+              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              {lowCount} low-risk
+            </span>
+          </div>
+        )}
       </div>
 
       {error && (
@@ -312,6 +335,7 @@ function MentorPerformance() {
     </div>
   );
 }
+
 
 function RiskBadge({ level }) {
   if (level === "high") {
