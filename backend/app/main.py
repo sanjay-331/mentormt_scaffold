@@ -1,22 +1,16 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from .api.v1.routes import router as api_router
-from .core.config import settings
+# backend/app/main.py
 
-app = FastAPI(title="DATABank API", version="1.0.0")
+"""
+Entry point for the new scaffold backend.
+We simply reuse the existing server.py (legacy backend)
+which defines:
+    - FastAPI app
+    - Socket.IO ASGI app (socket_app)
+All routes like /api/auth/login, /api/attendance, etc. remain the same.
+"""
 
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+from app.server import socket_app
 
-app.include_router(api_router, prefix="/api/v1")
-
-
-@app.get("/")
-async def root():
-    return {"message": "DATABank API - healthy"}
+# Uvicorn will look for a variable called `app`.
+# We point it to the Socket.IO ASGI app, which wraps FastAPI.
+app = socket_app

@@ -7,7 +7,10 @@ colorama==0.4.6
 cryptography==46.0.3
 dnspython==2.8.0
 ecdsa==0.19.1
-fastapi==0.95.0
+
+# UPDATED: use FastAPI compatible with Pydantic v2
+fastapi==0.115.0
+
 h11==0.14.0
 httpcore==0.17.3
 httptools==0.7.1
@@ -20,7 +23,10 @@ passlib==1.7.4
 pluggy==1.6.0
 pyasn1==0.6.1
 pycparser==2.23
-pydantic==1.10.12
+
+# UPDATED: Pydantic v2
+pydantic==2.9.2
+
 pymongo==4.15.5
 pytest==7.4.0
 python-dotenv==1.0.0
@@ -29,8 +35,17 @@ PyYAML==6.0.3
 rsa==4.9.1
 six==1.17.0
 sniffio==1.3.1
-starlette==0.26.1
+
+# REMOVE the explicit Starlette pin (this line should be deleted):
+# starlette==0.26.1
+
 typing_extensions==4.15.0
 uvicorn==0.22.0
 watchfiles==1.1.1
 websockets==15.0.1
+
+# EXTRA already added before
+pandas==2.2.3
+python-socketio[asgi]==5.11.4
+openpyxl==3.1.5
+email-validator==2.2.0

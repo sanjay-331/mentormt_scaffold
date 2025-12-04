@@ -1,0 +1,933 @@
+# from fastapi import FastAPI
+# from fastapi.middleware.cors import CORSMiddleware
+# from .api.v1.routes import router as api_router
+# from .core.config import settings
+
+# app = FastAPI(title="DATABank API", version="1.0.0")
+
+# # CORS
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=settings.CORS_ORIGINS,
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
+
+# app.include_router(api_router, prefix="/api/v1")
+
+
+# @app.get("/")
+# async def root():
+#     return {"message": "DATABank API - healthy"}
+
+"""
+Backend API for the E-Mentoring System built with FastAPI and MongoDB.
+Handles user authentication, data management, and socket communication.
+"""
+# --- Standard Library Imports ---
+import io
+import logging
+import os
+import uuid
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+from typing import List, Optional, Dict, Any
+
+# --- Third-Party Imports ---
+import pandas as pd
+import socketio
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Depends, status, File, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from jose import JWTError, jwt
+from motor.motor_asyncio import AsyncIOMotorClient
+from passlib.context import CryptContext
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
+
+
+ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / ".env")
+
+# MongoDB connection
+mongo_url = os.environ["MONGO_URL"]
+client = AsyncIOMotorClient(mongo_url)
+db = client[os.environ["DB_NAME"]]
+
+# Security
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 43200  # 30 days
+
+#pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+from passlib.context import CryptContext
+
+# Use PBKDF2-SHA256 instead of bcrypt to avoid Windows/bcrypt issues
+pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+security = HTTPBearer()
+
+# Socket.IO setup
+sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
+app = FastAPI(title="Student Mentor-Mentee System")
+socket_app = socketio.ASGIApp(sio, app)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# ==================== Models ====================
+
+
+class UserBase(BaseModel):
+    """Base user schema."""
+
+    email: EmailStr
+    full_name: str
+    role: str  # admin, mentor, student
+
+
+class UserCreate(UserBase):
+    """Schema for user registration."""
+
+    password: str
+
+
+class User(UserBase):
+    """Database schema for a User."""
+
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    phone: Optional[str] = None
+    department: Optional[str] = None
+    semester: Optional[int] = None
+    usn: Optional[str] = None  # For students
+    employee_id: Optional[str] = None  # For mentors
+
+
+class Token(BaseModel):
+    """Schema for the returned JWT token."""
+
+    access_token: str
+    token_type: str
+    user: Dict[str, Any]
+
+
+class MentorAssignment(BaseModel):
+    """Schema for mentor-student assignment records."""
+
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    mentor_id: str
+    student_ids: List[str]
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class AttendanceRecord(BaseModel):
+    """Schema for an individual attendance record."""
+
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    student_id: str
+    subject: str
+    date: str
+    status: str  # present, absent, leave
+    recorded_by: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class MarksRecord(BaseModel):
+    """Schema for an individual marks record."""
+
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    student_id: str
+    subject: str
+    semester: int
+    marks_type: str  # IA1, IA2, IA3, Assignment, VTU
+    marks_obtained: float
+    max_marks: float
+    recorded_by: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class Feedback(BaseModel):
+    """Schema for mentor feedback on students."""
+
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    mentor_id: str
+    student_id: str
+    feedback_text: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class Message(BaseModel):
+    """Schema for chat messages."""
+
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    sender_id: str
+    receiver_id: str
+    content: str
+    is_read: bool = False
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class Circular(BaseModel):
+    """Schema for college circulars/notices."""
+
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    author_id: str
+    title: str
+    content: str
+    target_audience: str  # all, students, mentors, specific
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class Rating(BaseModel):
+    """Schema for student performance ratings."""
+
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    student_id: str
+    mentor_id: str
+    attendance_rating: float
+    marks_rating: float
+    overall_rating: float
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+# ==================== Auth Helper Functions ====================
+
+
+def verify_password(plain_password, hashed_password):
+    """Verifies a plain password against a hashed one."""  # C0116
+    return pwd_context.verify(plain_password, hashed_password)
+
+
+def get_password_hash(password):
+    """Generates a password hash."""  # C0116
+    return pwd_context.hash(password)
+
+
+def create_access_token(data: dict):
+    """Creates a JWT access token."""  # C0116
+    to_encode = data.copy()
+    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+):
+    """Dependency to get the current authenticated user from the JWT token."""
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        token = credentials.credentials
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise credentials_exception
+    except JWTError as exc:  # Fix W0707 (raise-missing-from)
+        raise credentials_exception from exc
+
+    user = await db.users.find_one({"id": user_id})
+    if user is None:
+        raise credentials_exception
+
+    # Remove MongoDB ObjectId
+    if "_id" in user:
+        del user["_id"]
+    return user
+
+
+# ==================== Socket.IO Events ====================
+
+connected_users = {}  # user_id -> sid
+
+
+@sio.event
+async def connect(sid, _environ):  # Fix W0613 (unused-argument)
+    """Handles new client connections."""
+    logger.info("Client connected: %s", sid)  # Fix W1203 (logging-fstring)
+
+
+@sio.event
+async def disconnect(sid):
+    """Handles client disconnections."""
+    logger.info("Client disconnected: %s", sid)  # Fix W1203
+    # Remove from connected users
+    for user_id, user_sid in list(connected_users.items()):
+        if user_sid == sid:
+            del connected_users[user_id]
+            break
+
+
+@sio.event
+async def authenticate(sid, data):
+    """Authenticates a user for Socket.IO."""
+    user_id = data.get("user_id")
+    if user_id:
+        connected_users[user_id] = sid
+        logger.info(
+            "User %s authenticated with sid %s", user_id, sid
+        )  # Removed E501 comment fix
+
+
+@sio.event
+async def send_message(sid, data):
+    """Handles sending a new chat message."""
+    message_data = {
+        "id": str(uuid.uuid4()),
+        "sender_id": data["sender_id"],
+        "receiver_id": data["receiver_id"],
+        "content": data["content"],
+        "is_read": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # Save to database
+    await db.messages.insert_one(message_data)
+
+    # Emit to receiver if online
+    receiver_sid = connected_users.get(data["receiver_id"])
+    if receiver_sid:
+        await sio.emit("new_message", message_data, room=receiver_sid)
+
+    # Emit back to sender
+    await sio.emit("message_sent", message_data, room=sid)
+
+
+# ==================== API Routes ====================
+
+
+@app.get("/api")
+async def root():
+    """Root route for the API."""
+    return {"message": "Student Mentor-Mentee System API"}
+
+
+# Auth Routes
+@app.post("/api/auth/register", response_model=Token)
+async def register(user: UserCreate):
+    """Registers a new user and returns a JWT token."""
+    # Check if user exists
+    existing_user = await db.users.find_one({"email": user.email})
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    # Create user
+    user_dict = user.model_dump()
+    password = user_dict.pop("password")
+    user_obj = User(**user_dict)
+    user_data = user_obj.model_dump()
+    user_data["password_hash"] = get_password_hash(password)
+    user_data["created_at"] = user_data["created_at"].isoformat()
+
+    await db.users.insert_one(user_data)  # Fix F841 (removed 'result =')
+
+    # Create token
+    access_token = create_access_token(data={"sub": user_obj.id})
+    user_response = {
+        k: v for k, v in user_data.items() if k not in ["password_hash", "_id"]
+    }
+
+    return {"access_token": access_token, "token_type": "bearer", "user": user_response}
+
+
+# @app.post("/api/auth/login", response_model=Token)
+# async def login(email: EmailStr, password: str):
+#     """Logs in an existing user and returns a JWT token."""
+#     user = await db.users.find_one({"email": email})
+#     if not user or not verify_password(password, user["password_hash"]):
+#         raise HTTPException(status_code=400, detail="Incorrect email or password")
+
+#     access_token = create_access_token(data={"sub": user["id"]})
+#     user_response = {k: v for k, v in user.items() if k not in ["password_hash", "_id"]}
+
+#     return {"access_token": access_token, "token_type": "bearer", "user": user_response}
+
+@app.post("/api/auth/login", response_model=Token)
+async def login(email: EmailStr, password: str):
+    """Logs in an existing user and returns a JWT token."""
+    user = await db.users.find_one({"email": email})
+
+    # If user not found OR no password_hash field -> treat as invalid credentials
+    if not user or "password_hash" not in user:
+        raise HTTPException(status_code=400, detail="Incorrect email or password")
+
+    # Verify password
+    if not verify_password(password, user["password_hash"]):
+        raise HTTPException(status_code=400, detail="Incorrect email or password")
+
+    # Create JWT token
+    access_token = create_access_token(data={"sub": user["id"]})
+
+    # Remove sensitive fields from response
+    user_response = {
+        k: v for k, v in user.items() if k not in ["password_hash", "_id"]
+    }
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": user_response,
+    }
+
+@app.get("/api/auth/me")
+async def get_me(current_user: dict = Depends(get_current_user)):
+    """Retrieves the details of the currently authenticated user."""
+    return current_user
+
+
+# User Management Routes
+@app.get("/api/users")
+async def get_users(
+    role: Optional[str] = None,
+    current_user: dict = Depends(get_current_user),  # E501 fix
+):
+    """Retrieves a list of users, optionally filtered by role."""
+    if current_user["role"] not in ["admin", "mentor"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    query = {"role": role} if role else {}
+    users = await db.users.find(query, {"_id": 0, "password_hash": 0}).to_list(1000)
+    return users
+
+
+@app.get("/api/users/{user_id}")
+async def get_user(
+    user_id: str, current_user: dict = Depends(get_current_user)
+):  # E501 fix
+    """Retrieves a user by ID."""
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+@app.put("/api/users/{user_id}")
+async def update_user(
+    user_id: str, updates: dict, current_user: dict = Depends(get_current_user)
+):  # E501 fix
+    """Updates user details."""
+    if current_user["role"] not in ["admin"] and current_user["id"] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    # --- Start of Robustness Fix ---
+    # Filter out invalid or internal keys to prevent unwanted changes or errors
+    updates.pop("password", None)
+    updates.pop("password_hash", None)
+    updates.pop("email", None)
+    updates.pop("role", None)
+
+    # Use a clean dictionary for MongoDB $set operation
+    update_fields = {}
+
+    # Safely iterate and clean up values.
+    # Convert empty strings to None, and integers/floats if possible.
+    for key, value in updates.items():
+        if key in ["full_name", "phone", "department", "usn", "employee_id"]:
+            # Treat empty strings as None to align with Optional[...] models and cleanup
+            update_fields[key] = (
+                value if value is not None and str(value).strip() != "" else None
+            )
+        elif key == "semester":
+            # Attempt to convert semester to int, otherwise set to None
+            try:
+                if value is not None and str(value).strip() != "":
+                    update_fields[key] = int(value)
+                else:
+                    update_fields[key] = None
+            except ValueError as exc:
+                # If conversion fails (e.g., non-numeric input for semester), treat as error
+                raise HTTPException(
+                    status_code=400, detail="Semester must be an integer."
+                ) from exc
+        elif key not in ["id", "created_at", "_id"]:
+            # Include other fields not explicitly handled,
+            # assuming they are clean
+            update_fields[key] = value
+
+    if not update_fields:
+        raise HTTPException(
+            status_code=400, detail="No valid fields provided for update."
+        )
+
+    # --- End of Robustness Fix ---
+
+    await db.users.update_one({"id": user_id}, {"$set": update_fields})
+    updated_user = await db.users.find_one(
+        {"id": user_id}, {"_id": 0, "password_hash": 0}
+    )  # E501 fix
+
+    # Ensure updated_user exists before returning
+    if not updated_user:
+        raise HTTPException(status_code=404, detail="User not found after update.")
+
+    return updated_user
+
+
+@app.delete("/api/users/{user_id}")
+async def delete_user(
+    user_id: str, current_user: dict = Depends(get_current_user)
+):  # E501 fix
+    """Deletes a user by ID (Admin only)."""
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    await db.users.delete_one({"id": user_id})
+    return {"message": "User deleted successfully"}
+
+
+# Mentor Assignment Routes
+@app.post("/api/assignments")
+async def create_assignment(
+    mentor_id: str,
+    student_ids: List[str],
+    current_user: dict = Depends(get_current_user),
+):  # E501 fix
+    """Creates a new mentor assignment (Admin only)."""
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    # Remove existing assignment for this mentor
+    await db.assignments.delete_many({"mentor_id": mentor_id})
+
+    assignment = MentorAssignment(mentor_id=mentor_id, student_ids=student_ids)
+    assignment_data = assignment.model_dump()
+    assignment_data["created_at"] = assignment_data["created_at"].isoformat()
+
+    await db.assignments.insert_one(assignment_data)
+    return assignment_data
+
+
+@app.get("/api/assignments/mentor/{mentor_id}")
+async def get_mentor_students(
+    mentor_id: str, current_user: dict = Depends(get_current_user)
+):  # E501 fix
+    """Gets all students assigned to a specific mentor."""
+    assignment = await db.assignments.find_one({"mentor_id": mentor_id}, {"_id": 0})
+    if not assignment:
+        return {"students": []}
+
+    students = await db.users.find(
+        {"id": {"$in": assignment["student_ids"]}, "role": "student"},
+        {"_id": 0, "password_hash": 0},
+    ).to_list(
+        100
+    )  # E501 fix
+
+    return {"students": students}
+
+
+@app.get("/api/assignments/student/{student_id}")
+async def get_student_mentor(
+    student_id: str, current_user: dict = Depends(get_current_user)
+):  # E501 fix
+    """Gets the mentor assigned to a specific student."""
+    assignment = await db.assignments.find_one({"student_ids": student_id}, {"_id": 0})
+
+    if not assignment:
+        return {"mentor": None}
+
+    mentor = await db.users.find_one(
+        {"id": assignment["mentor_id"]}, {"_id": 0, "password_hash": 0}
+    )
+
+    return {"mentor": mentor}
+
+
+# Attendance Routes
+@app.post("/api/attendance")
+async def create_attendance(
+    record: AttendanceRecord, current_user: dict = Depends(get_current_user)
+):  # E501 fix
+    """Creates a single attendance record."""
+    if current_user["role"] not in ["admin", "mentor"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    record.recorded_by = current_user["id"]
+    record_data = record.model_dump()
+    record_data["created_at"] = record_data["created_at"].isoformat()
+
+    await db.attendance.insert_one(record_data)
+    return record_data
+
+
+@app.post("/api/attendance/upload")
+async def upload_attendance(
+    file: UploadFile = File(...), current_user: dict = Depends(get_current_user)
+):  # E501 fix
+    """Uploads attendance records from a CSV or Excel file."""
+    if current_user["role"] not in ["admin", "mentor"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    contents = await file.read()
+    df = (
+        pd.read_csv(io.BytesIO(contents))
+        if file.filename.endswith(".csv")
+        else pd.read_excel(io.BytesIO(contents))
+    )  # E501 fix
+
+    # Expected columns: student_usn, subject, date, status
+    records = []
+    for _, row in df.iterrows():
+        # Find student by USN
+        student = await db.users.find_one(
+            {"usn": row["student_usn"], "role": "student"}, {"_id": 0}
+        )
+        if student:
+            record = AttendanceRecord(
+                student_id=student["id"],
+                subject=row["subject"],
+                date=str(row["date"]),
+                status=row["status"],
+                recorded_by=current_user["id"],
+            )
+            record_data = record.model_dump()
+            record_data["created_at"] = record_data["created_at"].isoformat()
+            records.append(record_data)
+
+    if records:
+        await db.attendance.insert_many(records)
+
+    return {"message": f"Uploaded {len(records)} attendance records"}
+
+
+@app.get("/api/attendance/student/{student_id}")
+async def get_student_attendance(
+    student_id: str, current_user: dict = Depends(get_current_user)
+):  # E501 fix
+    """Gets all attendance records for a specific student."""
+    records = await db.attendance.find({"student_id": student_id}, {"_id": 0}).to_list(
+        1000
+    )
+    return records
+
+
+# Marks Routes
+@app.post("/api/marks")
+async def create_marks(
+    record: MarksRecord, current_user: dict = Depends(get_current_user)
+):  # E501 fix
+    """Creates a single marks record."""
+    if current_user["role"] not in ["admin", "mentor"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    record.recorded_by = current_user["id"]
+    record_data = record.model_dump()
+    record_data["created_at"] = record_data["created_at"].isoformat()
+
+    await db.marks.insert_one(record_data)
+    return record_data
+
+
+@app.post("/api/marks/upload")
+async def upload_marks(
+    file: UploadFile = File(...), current_user: dict = Depends(get_current_user)
+):  # E501 fix
+    """Uploads marks records from a CSV or Excel file."""
+    if current_user["role"] not in ["admin", "mentor"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    contents = await file.read()
+    df = (
+        pd.read_csv(io.BytesIO(contents))
+        if file.filename.endswith(".csv")
+        else pd.read_excel(io.BytesIO(contents))
+    )  # E501 fix
+
+    # Expected columns: student_usn, subject, semester, marks_type, marks_obtained, max_marks
+    records = []
+    for _, row in df.iterrows():
+        student = await db.users.find_one(
+            {"usn": row["student_usn"], "role": "student"}, {"_id": 0}
+        )  # E501 fix
+        if student:
+            record = MarksRecord(
+                student_id=student["id"],
+                subject=row["subject"],
+                semester=int(row["semester"]),
+                marks_type=row["marks_type"],
+                marks_obtained=float(row["marks_obtained"]),
+                max_marks=float(row["max_marks"]),
+                recorded_by=current_user["id"],
+            )
+            record_data = record.model_dump()
+            record_data["created_at"] = record_data["created_at"].isoformat()
+            records.append(record_data)
+
+    if records:
+        await db.marks.insert_many(records)
+
+    return {"message": f"Uploaded {len(records)} marks records"}
+
+
+@app.get("/api/marks/student/{student_id}")
+async def get_student_marks(
+    student_id: str, current_user: dict = Depends(get_current_user)
+):
+    """Gets all marks records for a specific student."""
+    records = await db.marks.find({"student_id": student_id}, {"_id": 0}).to_list(1000)
+    return records
+
+
+# Feedback Routes
+@app.post("/api/feedback")
+async def create_feedback(
+    feedback: Feedback, current_user: dict = Depends(get_current_user)
+):  # E501 fix
+    """Creates a new feedback record (Mentor only)."""
+    if current_user["role"] not in ["admin", "mentor"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    feedback.mentor_id = current_user["id"]
+    feedback_data = feedback.model_dump()
+    feedback_data["created_at"] = feedback_data["created_at"].isoformat()
+
+    await db.feedback.insert_one(feedback_data)
+    return feedback_data
+
+
+@app.get("/api/feedback/student/{student_id}")
+async def get_student_feedback(
+    student_id: str, current_user: dict = Depends(get_current_user)
+):  # E501 fix
+    """Gets all feedback records for a specific student."""
+    if current_user["role"] != "student" or current_user["id"] != student_id:
+        if current_user["role"] not in ["admin", "mentor"]:
+            raise HTTPException(status_code=403, detail="Not authorized")
+
+    feedbacks = await db.feedback.find({"student_id": student_id}, {"_id": 0}).to_list(
+        1000
+    )  # E501 fix
+    return feedbacks
+
+
+# Messages Routes
+@app.get("/api/messages")
+async def get_messages(
+    other_user_id: str, current_user: dict = Depends(get_current_user)
+):
+    """Gets messages between the current user and another user."""
+    messages = (
+        await db.messages.find(
+            {
+                "$or": [
+                    {"sender_id": current_user["id"], "receiver_id": other_user_id},
+                    {"sender_id": other_user_id, "receiver_id": current_user["id"]},
+                ]
+            },
+            {"_id": 0},
+        )
+        .sort("created_at", 1)
+        .to_list(1000)
+    )
+
+    # Mark as read
+    await db.messages.update_many(
+        {
+            "sender_id": other_user_id,
+            "receiver_id": current_user["id"],
+            "is_read": False,
+        },
+        {"$set": {"is_read": True}},
+    )
+
+    return messages
+
+
+@app.get("/api/messages/conversations")
+async def get_conversations(current_user: dict = Depends(get_current_user)):
+    """Gets a list of users the current user has conversed with."""
+    # Get all unique user IDs the current user has conversed with
+    messages = await db.messages.find(
+        {
+            "$or": [
+                {"sender_id": current_user["id"]},
+                {"receiver_id": current_user["id"]},
+            ]
+        },
+        {"_id": 0},
+    ).to_list(10000)
+
+    user_ids = set()
+    for msg in messages:
+        if msg["sender_id"] != current_user["id"]:
+            user_ids.add(msg["sender_id"])
+        if msg["receiver_id"] != current_user["id"]:
+            user_ids.add(msg["receiver_id"])
+
+    users = await db.users.find(
+        {"id": {"$in": list(user_ids)}}, {"_id": 0, "password_hash": 0}
+    ).to_list(1000)
+
+    return users
+
+
+# Circulars Routes
+@app.post("/api/circulars")
+async def create_circular(
+    circular: Circular, current_user: dict = Depends(get_current_user)
+):
+    """Creates a new circular (Admin or Mentor only)."""
+    if current_user["role"] not in ["admin", "mentor"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    circular.author_id = current_user["id"]
+    circular_data = circular.model_dump()
+    circular_data["created_at"] = circular_data["created_at"].isoformat()
+
+    await db.circulars.insert_one(circular_data)
+    return circular_data
+
+
+@app.get("/api/circulars")
+async def get_circulars(current_user: dict = Depends(get_current_user)):
+    """Gets circulars relevant to the user's role."""
+    query = {
+        "$or": [
+            {"target_audience": "all"},
+            {"target_audience": current_user["role"] + "s"},
+        ]
+    }
+
+    circulars = (
+        await db.circulars.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    )
+    return circulars
+
+
+# Ratings Routes
+@app.post("/api/ratings")
+async def create_rating(rating: Rating, current_user: dict = Depends(get_current_user)):
+    """Creates a student rating (Mentor only)."""
+    if current_user["role"] not in ["admin", "mentor"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    # The Mentor ID should always be the ID of the current authenticated user who is submitting the rating.
+    rating.mentor_id = current_user["id"]
+
+    rating_data = rating.model_dump()
+    rating_data["created_at"] = rating_data["created_at"].isoformat()
+
+    # Remove existing rating by this specific mentor for this student
+    # NOTE: The original code removed ALL previous ratings for the student by ANY mentor,
+    # which seems odd for tracking history. We will keep the original logic for idempotency
+    # (a mentor can only have one rating for a student at a time) but flag it as potential improvement.
+    await db.ratings.delete_many(
+        {"student_id": rating.student_id, "mentor_id": rating.mentor_id}
+    )
+
+    await db.ratings.insert_one(rating_data)
+    return rating_data
+
+
+@app.get("/api/ratings/student/{student_id}")
+async def get_student_rating(
+    student_id: str, current_user: dict = Depends(get_current_user)
+):
+    """Gets the latest rating for a specific student."""
+    # We should return the MOST RECENT rating from any mentor if multiple ratings exist.
+    # The original implementation only returns one arbitrary rating, so we stick to finding one.
+    rating = await db.ratings.find_one(
+        {"student_id": student_id},
+        {"_id": 0},
+        sort=[("created_at", -1)],  # Sort by newest first, limiting to one result
+    )
+    return rating if rating else {}
+
+
+# Dashboard Statistics
+@app.get("/api/stats/admin")
+async def get_admin_stats(current_user: dict = Depends(get_current_user)):
+    """Gets key statistics for the admin dashboard."""
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    total_students = await db.users.count_documents({"role": "student"})
+    total_mentors = await db.users.count_documents({"role": "mentor"})
+    total_circulars = await db.circulars.count_documents({})
+    total_assignments = await db.assignments.count_documents({})
+
+    return {
+        "total_students": total_students,
+        "total_mentors": total_mentors,
+        "total_circulars": total_circulars,
+        "total_assignments": total_assignments,
+    }
+
+
+@app.get("/api/stats/mentor")
+async def get_mentor_stats(current_user: dict = Depends(get_current_user)):
+    """Gets key statistics for the mentor dashboard."""
+    if current_user["role"] != "mentor":
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    assignment = await db.assignments.find_one(
+        {"mentor_id": current_user["id"]}, {"_id": 0}
+    )
+    assigned_students = len(assignment["student_ids"]) if assignment else 0
+
+    total_feedback = await db.feedback.count_documents(
+        {"mentor_id": current_user["id"]}
+    )
+
+    return {"assigned_students": assigned_students, "total_feedback": total_feedback}
+
+
+@app.get("/api/stats/student")
+async def get_student_stats(current_user: dict = Depends(get_current_user)):
+    """Gets key statistics for the student dashboard."""
+    if current_user["role"] != "student":
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    # Calculate attendance percentage
+    attendance_records = await db.attendance.find(
+        {"student_id": current_user["id"]}, {"_id": 0}
+    ).to_list(1000)
+    total_attendance = len(attendance_records)
+    present_count = sum(1 for r in attendance_records if r["status"] == "present")
+    attendance_percentage = (
+        (present_count / total_attendance * 100) if total_attendance > 0 else 0
+    )
+
+    # Calculate average marks
+    marks_records = await db.marks.find(
+        {"student_id": current_user["id"]}, {"_id": 0}
+    ).to_list(1000)
+    if marks_records:
+        avg_percentage = sum(
+            (r["marks_obtained"] / r["max_marks"] * 100) for r in marks_records
+        ) / len(marks_records)
+    else:
+        avg_percentage = 0
+
+    return {
+        "attendance_percentage": round(attendance_percentage, 2),
+        "average_marks_percentage": round(avg_percentage, 2),
+        "total_subjects": len(set(r["subject"] for r in marks_records)),
+    }
+
+
+@app.on_event("shutdown")
+async def shutdown_db_client():
+    """Closes the MongoDB client connection on application shutdown."""
+    client.close()
