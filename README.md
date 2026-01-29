@@ -1,4 +1,4 @@
-# DATABank — Starter Full-Stack Template
+# E-Mentor Mentee System — Starter Full-Stack Template
 
 Tech:
 - Backend: FastAPI + Uvicorn
