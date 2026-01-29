@@ -6,6 +6,9 @@ import { getStudentStats } from "../services/stats";
 import { getStudentAttendance } from "../services/attendance";
 import { getStudentMarks } from "../services/marks";
 import { getCirculars } from "../services/circulars";
+import { getStudentTimeline } from "../services/timeline";
+import { getAcademicHistory } from "../services/history";
+import { downloadReport } from "../services/reports";
 
 import {
   LineChart,
@@ -26,7 +29,7 @@ export default function StudentDashboard() {
   const { user, logout } = useAuth();
   const [stats, setStats] = useState(null);
   const [loadingStats, setLoadingStats] = useState(true);
-  const [activeTab, setActiveTab] = useState("overview"); // overview | attendance | marks | circulars
+  const [activeTab, setActiveTab] = useState("overview"); // overview | attendance | marks | circulars | timeline | history
 
   useEffect(() => {
     async function load() {
@@ -108,6 +111,18 @@ export default function StudentDashboard() {
             >
               Circulars
             </TabButton>
+            <TabButton
+              active={activeTab === "timeline"}
+              onClick={() => setActiveTab("timeline")}
+            >
+              Timeline
+            </TabButton>
+            <TabButton
+              active={activeTab === "history"}
+              onClick={() => setActiveTab("history")}
+            >
+              Academic History
+            </TabButton>
           </nav>
         </div>
 
@@ -151,6 +166,10 @@ export default function StudentDashboard() {
         {activeTab === "marks" && <StudentMarksDetails />}
 
         {activeTab === "circulars" && <StudentCirculars />}
+        
+        {activeTab === "timeline" && <StudentTimeline />}
+        
+        {activeTab === "history" && <StudentAcademicHistory />}
       </main>
     </div>
   );
@@ -365,6 +384,11 @@ function StudentAttendanceDetails() {
         <h3 className="text-sm font-semibold text-slate-800 mb-3">
           Attendance records ({records.length})
         </h3>
+        
+        <div className="flex gap-2 mb-3">
+            <button onClick={() => downloadReport('attendance', 'pdf')} className="text-xs px-2 py-1 bg-red-50 text-red-700 rounded hover:bg-red-100">Download PDF</button>
+            <button onClick={() => downloadReport('attendance', 'xlsx')} className="text-xs px-2 py-1 bg-green-50 text-green-700 rounded hover:bg-green-100">Download Excel</button>
+        </div>
 
         {loadError && (
           <div className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl px-3 py-2 mb-2">
@@ -538,6 +562,11 @@ function StudentMarksDetails() {
         <h3 className="text-sm font-semibold text-slate-800 mb-3">
           Marks records ({marks.length})
         </h3>
+        
+        <div className="flex gap-2 mb-3">
+            <button onClick={() => downloadReport('marks', 'pdf')} className="text-xs px-2 py-1 bg-red-50 text-red-700 rounded hover:bg-red-100">Download PDF</button>
+            <button onClick={() => downloadReport('marks', 'xlsx')} className="text-xs px-2 py-1 bg-green-50 text-green-700 rounded hover:bg-green-100">Download Excel</button>
+        </div>
 
         {loadError && (
           <div className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl px-3 py-2 mb-2">
@@ -700,4 +729,119 @@ function formatDate(dateStr) {
   const d = new Date(dateStr);
   if (Number.isNaN(d.getTime())) return dateStr;
   return d.toLocaleDateString();
+}
+
+/* --------------- Timeline --------------- */
+
+function StudentTimeline() {
+  const [timeline, setTimeline] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const data = await getStudentTimeline();
+        setTimeline(data || []);
+      } catch (e) {
+        console.error("Failed to load timeline");
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
+  }, []);
+
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4">
+      <h3 className="text-sm font-semibold text-slate-800 mb-3">Activity Timeline</h3>
+      {loading ? (
+        <div className="text-sm text-slate-500">Loading timeline...</div>
+      ) : timeline.length === 0 ? (
+        <div className="text-sm text-slate-500">No recent activity.</div>
+      ) : (
+        <div className="space-y-4">
+          {timeline.map((item, idx) => (
+            <div key={idx} className="flex gap-3">
+              <div className="flex-shrink-0 w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-lg">
+                {item.type === "notification" ? "🔔" : "💬"}
+              </div>
+              <div>
+                <div className="text-sm font-medium text-slate-800">{item.title}</div>
+                <div className="text-xs text-slate-600 mt-0.5">{item.description}</div>
+                <div className="text-[10px] text-slate-400 mt-1">
+                  {new Date(item.timestamp).toLocaleString()}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* --------------- Academic History --------------- */
+
+function StudentAcademicHistory() {
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const data = await getAcademicHistory();
+        setHistory(data || []);
+      } catch (e) {
+        console.error("Failed to load history");
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
+  }, []);
+
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4">
+      <h3 className="text-sm font-semibold text-slate-800 mb-3">Semester-wise History</h3>
+       {loading ? (
+        <div className="text-sm text-slate-500">Loading history...</div>
+      ) : history.length === 0 ? (
+        <div className="text-sm text-slate-500">No academic history available.</div>
+      ) : (
+        <>
+            <div className="h-64 mb-6">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={history}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="semester" tickFormatter={(v) => `Sem ${v}`} />
+                    <YAxis domain={[0, 100]} />
+                    <Tooltip />
+                    <Bar dataKey="average_percentage" name="Avg %" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+            </div>
+          
+           {/* Table */}
+           <table className="min-w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-slate-500 border-b border-slate-100 bg-slate-50">
+                  <th className="py-2 px-3">Semester</th>
+                  <th className="py-2 px-3">Subjects</th>
+                  <th className="py-2 px-3">Avg %</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.map((h) => (
+                   <tr key={h.semester} className="border-b border-slate-50 last:border-0">
+                      <td className="py-2 px-3">Semester {h.semester}</td>
+                      <td className="py-2 px-3">{h.subjects_count}</td>
+                      <td className="py-2 px-3 font-medium text-slate-700">{h.average_percentage}%</td>
+                   </tr>
+                ))}
+              </tbody>
+           </table>
+        </>
+      )}
+    </div>
+  );
 }

@@ -1,6 +1,7 @@
 import json
 from typing import List, Union
-from pydantic import BaseSettings, validator, Field
+from pydantic import Field, validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -13,9 +14,7 @@ class Settings(BaseSettings):
     MONGO_URL: str | None = Field(None, env="MONGO_URL")
     DB_NAME: str = Field("testdb", env="DB_NAME")
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     @validator("CORS_ORIGINS", pre=True)
     @classmethod

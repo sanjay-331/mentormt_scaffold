@@ -14,6 +14,7 @@ from typing import List, Optional, Dict, Any
 # --- Third-Party Imports ---
 import pandas as pd
 import socketio
+from app.sio_instance import sio, connected_users
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Depends, status, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,6 +25,16 @@ from jose import JWTError, jwt
 from motor.motor_asyncio import AsyncIOMotorClient
 from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from app.core.notifications import create_notification, create_broadcast_notification, check_academic_risk
+from app.core.analytics import get_system_risk_distribution, get_department_performance, predict_student_outcome
+from app.core.reports import generate_attendance_report, generate_marks_report, generate_mentor_summary_report
+from app.core.search import global_search
+from app.core.recommendations import recommend_mentors
+from app.core.audit import log_action
+from fastapi.responses import StreamingResponse
+
+
+
 
 
 ROOT_DIR = Path(__file__).parent
@@ -47,7 +58,7 @@ pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 security = HTTPBearer()
 
 # Socket.IO setup
-sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
+# sio IS IMPORTED from app.sio_instance
 app = FastAPI(title="Student Mentor-Mentee System")
 socket_app = socketio.ASGIApp(sio, app)
 
@@ -65,6 +76,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -103,6 +116,7 @@ class User(UserBase):
     semester: Optional[int] = None
     usn: Optional[str] = None  # For students
     employee_id: Optional[str] = None  # For mentors
+    settings: Dict[str, Any] = Field(default_factory=dict)
 
 
 class Token(BaseModel):
@@ -288,7 +302,7 @@ async def get_current_user(
 
 # ==================== Socket.IO Events ====================
 
-connected_users = {}  # user_id -> sid
+# connected_users is imported from app.sio_instance
 
 
 @sio.event
@@ -372,11 +386,14 @@ async def register(user: UserCreate):
     await db.users.insert_one(user_data)  # Fix F841 (removed 'result =')
 
     # Create token
-    access_token = create_access_token(data={"sub": user_obj.id})
-    user_response = {
-        k: v for k, v in user_data.items() if k not in ["password_hash", "_id"]
-    }
-
+    access_token = create_access_token(
+        data={"sub": user_obj.id, "email": user_obj.email, "role": user_obj.role}
+    )
+    
+    # Audit Log
+    await log_action(user_obj.id, "REGISTER", "auth", ip_address="127.0.0.1") # Simplification for MVP
+    
+    user_response = {k: v for k, v in user_data.items() if k not in ["password_hash", "_id"]}
     return {"access_token": access_token, "token_type": "bearer", "user": user_response}
 
 
@@ -406,23 +423,44 @@ async def login(email: EmailStr, password: str):
         raise HTTPException(status_code=400, detail="Incorrect email or password")
 
     # Create JWT token
-    access_token = create_access_token(data={"sub": user["id"]})
-
-    # Remove sensitive fields from response
-    user_response = {
-        k: v for k, v in user.items() if k not in ["password_hash", "_id"]
-    }
-
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "user": user_response,
-    }
+    access_token = create_access_token(
+        data={"sub": user["id"], "email": user["email"], "role": user["role"]}
+    )
+    
+    # Audit Log
+    await log_action(user["id"], "LOGIN", "auth", ip_address="127.0.0.1") # Simplification for MVP
+    
+    user_response = {k: v for k, v in user.items() if k not in ["password_hash", "_id"]}
+    return {"access_token": access_token, "token_type": "bearer", "user": user_response}
 
 @app.get("/api/auth/me")
 async def get_me(current_user: dict = Depends(get_current_user)):
     """Retrieves the details of the currently authenticated user."""
     return current_user
+
+
+@app.get("/api/users/me")
+async def read_users_me(current_user: dict = Depends(get_current_user)):
+    return current_user
+
+
+@app.put("/api/users/me/settings")
+async def update_user_settings(
+    settings: Dict[str, Any],
+    current_user: dict = Depends(get_current_user)
+):
+    """Update user preferences (e.g. dark mode)."""
+    updated_settings = current_user.get("settings", {})
+    updated_settings.update(settings)
+    
+    await db.users.update_one(
+        {"id": current_user["id"]},
+        {"$set": {"settings": updated_settings}}
+    )
+    
+    await log_action(current_user["id"], "UPDATE", "settings", {"changes": settings})
+    
+    return {"message": "Settings updated", "settings": updated_settings}
 
 
 # User Management Routes
@@ -510,6 +548,8 @@ async def update_user(
     if not updated_user:
         raise HTTPException(status_code=404, detail="User not found after update.")
 
+    await log_action(current_user["id"], "UPDATE", "user", {"user_id": user_id, "changes": update_fields})
+
     return updated_user
 
 
@@ -522,6 +562,7 @@ async def delete_user(
         raise HTTPException(status_code=403, detail="Not authorized")
 
     await db.users.delete_one({"id": user_id})
+    await log_action(current_user["id"], "DELETE", "user", {"user_id": user_id})
     return {"message": "User deleted successfully"}
 
 
@@ -575,6 +616,8 @@ async def create_assignment(
 
     # SAFETY: Remove raw ObjectId and DB _id if present
     assignment_data.pop("_id", None)
+
+    await log_action(current_user["id"], "CREATE", "assignment", {"mentor_id": mentor_id, "student_count": len(student_ids)})
 
     return assignment_data
 
@@ -643,6 +686,10 @@ async def create_attendance(
     record_data["mongo_id"] = str(result.inserted_id)
     record_data.pop("_id", None)
 
+    # Trigger Risk Check
+    await check_academic_risk(str(payload.student_id))
+    await log_action(current_user["id"], "CREATE", "attendance", {"student_id": payload.student_id, "subject": payload.subject, "status": payload.status})
+
     return record_data
 
 @app.post("/api/attendance/upload")
@@ -681,6 +728,12 @@ async def upload_attendance(
 
     if records:
         await db.attendance.insert_many(records)
+        # Trigger risk check for unique students involved
+        unique_students = set(r["student_id"] for r in records)
+        for sid in unique_students:
+            await check_academic_risk(str(sid))
+            
+    await log_action(current_user["id"], "UPLOAD", "attendance", {"count": len(records)})
 
     return {"message": f"Uploaded {len(records)} attendance records"}
 
@@ -726,6 +779,10 @@ async def create_marks(
     # Avoid returning raw ObjectId
     record_data["mongo_id"] = str(result.inserted_id)
     record_data.pop("_id", None)
+
+    # Trigger Risk Check
+    await check_academic_risk(str(payload.student_id))
+    await log_action(current_user["id"], "CREATE", "marks", {"student_id": payload.student_id, "subject": payload.subject, "marks_type": payload.marks_type})
 
     return record_data
 
@@ -784,6 +841,12 @@ async def upload_marks(
 
     if records:
         await db.marks.insert_many(records)
+        # Trigger risk check for unique students
+        unique_students = set(r["student_id"] for r in records)
+        for sid in unique_students:
+            await check_academic_risk(str(sid))
+            
+    await log_action(current_user["id"], "UPLOAD", "marks", {"count": len(records)})
 
     return {"message": f"Uploaded {len(records)} marks records"}
 
@@ -834,7 +897,20 @@ async def create_feedback(
 
     # Avoid ObjectId issues in response
     feedback_data["mongo_id"] = str(result.inserted_id)
+    feedback_data["mongo_id"] = str(result.inserted_id)
     feedback_data.pop("_id", None)
+
+    # Notify Student
+    await create_notification(
+        user_id=payload.student_id,
+        title="New Feedback Received",
+        message="Your mentor has provided new feedback.",
+        type="info",
+        link="/student/feedback",
+        metadata={"feedback_id": feedback_data["mongo_id"]}
+    )
+    
+    await log_action(current_user["id"], "CREATE", "feedback", {"student_id": payload.student_id})
 
     return feedback_data
 
@@ -958,6 +1034,17 @@ async def create_circular(
     # 🔑 IMPORTANT: remove Mongo's ObjectId before returning
     data.pop("_id", None)
     data["mongo_id"] = str(result.inserted_id)
+
+    # Broadcast Notification
+    await create_broadcast_notification(
+        target_role=target_audience,
+        title=f"New Circular: {title}",
+        message=content[:100] + ("..." if len(content) > 100 else ""),
+        type="info",
+        link="/circulars"
+    )
+    
+    await log_action(current_user["id"], "CREATE", "circular", {"title": title, "audience": target_audience})
 
     return data
 
@@ -1258,4 +1345,300 @@ async def shutdown_db_client():
     client.close()
 
 
-app.mount("/uploads", StaticFiles(directory="app/uploads"), name="uploads")
+app.mount("/uploads", StaticFiles(directory=str(ROOT_DIR / "uploads")), name="uploads")
+
+
+# ==================== Notification Routes ====================
+
+@app.get("/api/notifications")
+async def get_notifications(
+    limit: int = 50,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get notifications for the current user."""
+    notifications = await db.notifications.find(
+        {"user_id": current_user["id"]},
+        {"_id": 0}
+    ).sort("created_at", -1).limit(limit).to_list(limit)
+    
+    return notifications
+
+
+@app.put("/api/notifications/{notification_id}/read")
+async def mark_notification_read(
+    notification_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Mark a specific notification as read."""
+    result = await db.notifications.update_one(
+        {"id": notification_id, "user_id": current_user["id"]},
+        {"$set": {"read": True}}
+    )
+    if result.modified_count == 0:
+        return {"message": "Notification not found or already read"}
+    return {"message": "Marked as read"}
+
+
+@app.put("/api/notifications/read-all")
+async def mark_all_notifications_read(
+    current_user: dict = Depends(get_current_user)
+):
+    """Mark all notifications for the user as read."""
+    await db.notifications.update_many(
+        {"user_id": current_user["id"], "read": False},
+        {"$set": {"read": True}}
+    )
+    return {"message": "All notifications marked as read"}
+
+
+# ==================== Analytics Routes ====================
+
+@app.get("/api/analytics/system-risk")
+async def get_system_risk_analytics(
+    current_user: dict = Depends(get_current_user)
+):
+    """(Admin) Get system-wide risk distribution."""
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return await get_system_risk_distribution()
+
+
+@app.get("/api/analytics/dept-performance")
+async def get_dept_performance_analytics(
+    current_user: dict = Depends(get_current_user)
+):
+    """(Admin) Get average performance by department."""
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return await get_department_performance()
+
+
+@app.get("/api/analytics/mentor/predictions")
+async def get_mentor_predictions(
+    current_user: dict = Depends(get_current_user)
+):
+    """(Mentor) Get performance predictions for assigned students."""
+    if current_user["role"] != "mentor":
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    assignment = await db.assignments.find_one({"mentor_id": current_user["id"]})
+    if not assignment or not assignment.get("student_ids"):
+        return []
+        
+    predictions = []
+    # Fetch simple student info
+    students_map = {}
+    students = await db.users.find(
+        {"id": {"$in": assignment["student_ids"]}}, {"full_name": 1, "usn": 1, "id": 1, "_id": 0}
+    ).to_list(1000)
+    for s in students: students_map[s["id"]] = s
+    
+    for student_id in assignment["student_ids"]:
+        pred = await predict_student_outcome(student_id)
+        if pred["prediction"] != "Insufficient Data":
+             s_info = students_map.get(student_id, {})
+             predictions.append({
+                 "student_id": student_id,
+                 "full_name": s_info.get("full_name"),
+                 "usn": s_info.get("usn"),
+                 **pred
+             })
+             
+    return predictions
+
+
+@app.get("/api/reports/attendance")
+async def download_attendance_report(
+    format: str,
+    student_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Download attendance report (PDF/Excel)."""
+    if current_user["role"] == "student":
+        student_id = current_user["id"]
+    elif current_user["role"] not in ["admin", "mentor"]:
+         raise HTTPException(status_code=403, detail="Not authorized")
+         
+    file_content = await generate_attendance_report(format, student_id)
+    
+    media_type = "application/pdf" if format == "pdf" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    filename = f"attendance_report.{'pdf' if format == 'pdf' else 'xlsx'}"
+    
+    return StreamingResponse(
+        io.BytesIO(file_content),
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+@app.get("/api/reports/marks")
+async def download_marks_report(
+    format: str,
+    student_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Download marks report (PDF/Excel)."""
+    if current_user["role"] == "student":
+        student_id = current_user["id"]
+    elif current_user["role"] not in ["admin", "mentor"]:
+         raise HTTPException(status_code=403, detail="Not authorized")
+         
+    file_content = await generate_marks_report(format, student_id)
+    
+    media_type = "application/pdf" if format == "pdf" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    filename = f"marks_report.{'pdf' if format == 'pdf' else 'xlsx'}"
+    
+    return StreamingResponse(
+        io.BytesIO(file_content),
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+@app.get("/api/reports/mentor-summary")
+async def download_mentor_summary(
+    format: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """(Mentor) Download summary of mentees."""
+    if current_user["role"] != "mentor":
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    file_content = await generate_mentor_summary_report(format, current_user["id"])
+    
+    media_type = "application/pdf" if format == "pdf" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    filename = f"mentor_summary.{'pdf' if format == 'pdf' else 'xlsx'}"
+    
+    return StreamingResponse(
+        io.BytesIO(file_content),
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
+
+
+@app.get("/api/search")
+async def search_all(
+    q: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Global search for Users and Circulars."""
+    return await global_search(q, current_user["role"])
+
+
+@app.get("/api/mentors/recommendations/{student_id}")
+async def get_recommended_mentors(
+    student_id: str,
+     current_user: dict = Depends(get_current_user)
+):
+    """Get recommended mentors for a student."""
+    if current_user["role"] not in ["admin", "student"]:
+         # Mentors generally don't need to recommend mentors? Actually maybe for re-assignment. 
+         # Let's allow admins and the student themselves.
+         if current_user["role"] == "mentor":
+             pass # Allow mentors too
+         else:
+             raise HTTPException(status_code=403, detail="Not authorized")
+             
+    return await recommend_mentors(student_id)
+
+
+# ==================== Audit Routes ====================
+
+@app.get("/api/audit-logs")
+async def get_audit_logs(
+    limit: int = 50,
+    current_user: dict = Depends(get_current_user)
+):
+    """(Admin) Get system audit logs."""
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    logs = await db.audit_logs.find({}, {"_id": 0}).sort("timestamp", -1).limit(limit).to_list(limit)
+    return logs
+
+
+@app.get("/api/analytics/student/history")
+async def get_academic_history(
+    student_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get semester-wise academic history."""
+    if current_user["role"] == "student":
+        student_id = current_user["id"]
+    elif current_user["role"] not in ["admin", "mentor"]:
+         raise HTTPException(status_code=403, detail="Not authorized")
+         
+    if not student_id:
+        return []
+        
+    marks = await db.marks.find({"student_id": student_id}, {"_id": 0}).to_list(10000)
+    
+    # Aggregate by semester
+    history = {} # sem -> {total_marks: 0, max_marks: 0, subjects: set()}
+    
+    for m in marks:
+        sem = m.get("semester", 1) # Default to 1 if missing
+        if sem not in history:
+            history[sem] = {"total_marks": 0, "max_marks": 0, "subjects": set()}
+            
+        history[sem]["total_marks"] += m["marks_obtained"]
+        history[sem]["max_marks"] += m["max_marks"]
+        history[sem]["subjects"].add(m["subject"])
+        
+    result = []
+    for sem, data in history.items():
+        avg = (data["total_marks"] / data["max_marks"] * 100) if data["max_marks"] > 0 else 0
+        result.append({
+            "semester": sem,
+            "average_percentage": round(avg, 2),
+            "subjects_count": len(data["subjects"])
+        })
+        
+    return sorted(result, key=lambda x: x["semester"])
+
+
+@app.get("/api/student/timeline")
+async def get_student_timeline(
+    current_user: dict = Depends(get_current_user)
+):
+    """Get chronological activity timeline for student."""
+    if current_user["role"] != "student":
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    # 1. Notifications
+    notifs = await db.notifications.find(
+        {"user_id": current_user["id"]}, 
+        {"title": 1, "message": 1, "created_at": 1, "type": 1, "_id": 0}
+    ).sort("created_at", -1).limit(20).to_list(20)
+    
+    # 2. Feedback
+    feedbacks = await db.feedback.find(
+        {"student_id": current_user["id"]},
+        {"feedback_type": 1, "comments": 1, "created_at": 1, "mentor_name": 1, "_id": 0}
+    ).sort("created_at", -1).limit(20).to_list(20)
+    
+    # Merge and Sort
+    timeline = []
+    
+    for n in notifs:
+        timeline.append({
+            "type": "notification",
+            "title": n.get("title"),
+            "description": n.get("message"),
+            "timestamp": n["created_at"],
+            "meta": {"type": n.get("type")}
+        })
+        
+    for f in feedbacks:
+        timeline.append({
+            "type": "feedback",
+            "title": f"Feedback: {f.get('feedback_type', 'General')}",
+            "description": f.get("comments"),
+            "timestamp": f["created_at"],
+            "meta": {"mentor": f.get("mentor_name")}
+        })
+        
+    # Sort descending by timestamp
+    timeline.sort(key=lambda x: x["timestamp"], reverse=True)
+    
+    return timeline[:50]

@@ -1,9 +1,9 @@
 ﻿import asyncio
-from app.db import get_db
-from app.core.security import get_password_hash
+from app.db import db
+from app.server import get_password_hash
 
 async def create_users():
-    db = get_db()
+
     users = [
         {'email': 'admin@example.com',  'hashed_password': get_password_hash('password123'), 'full_name': 'Admin',  'role': 'admin'},
         {'email': 'mentor@example.com', 'hashed_password': get_password_hash('password123'), 'full_name': 'Mentor', 'role': 'mentor'},
