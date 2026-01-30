@@ -1,7 +1,7 @@
 ﻿// src/pages/Login.jsx
 
 import React, { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
 export default function Login() {
@@ -70,6 +70,14 @@ export default function Login() {
               className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent bg-white"
               placeholder="••••••••"
             />
+            <div className="flex justify-end mt-1">
+              <Link
+                to="/forgot-password"
+                className="text-xs font-medium text-teal-600 hover:text-teal-500"
+              >
+                Forgot Password?
+              </Link>
+            </div>
           </div>
 
           {error && (
@@ -86,6 +94,16 @@ export default function Login() {
             {loading ? "Signing in..." : "Sign in"}
           </button>
         </form>
+
+        <p className="mt-6 text-center text-sm text-slate-500">
+          Don't have an account?{" "}
+          <Link
+            to="/register"
+            className="font-medium text-teal-600 hover:text-teal-500"
+          >
+            Sign up
+          </Link>
+        </p>
       </div>
     </div>
   );

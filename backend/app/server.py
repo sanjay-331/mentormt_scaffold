@@ -118,6 +118,20 @@ class User(UserBase):
     usn: Optional[str] = None  # For students
     employee_id: Optional[str] = None  # For mentors
     settings: Dict[str, Any] = Field(default_factory=dict)
+    reset_token: Optional[str] = None
+    reset_token_expiry: Optional[datetime] = None
+
+
+
+class ForgotPasswordRequest(BaseModel):
+    """Schema for forgot password request."""
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    """Schema for reset password request."""
+    token: str
+    new_password: str
 
 
 class Token(BaseModel):
@@ -433,6 +447,80 @@ async def login(email: EmailStr, password: str):
     
     user_response = {k: v for k, v in user.items() if k not in ["password_hash", "_id"]}
     return {"access_token": access_token, "token_type": "bearer", "user": user_response}
+
+    user_response = {k: v for k, v in user.items() if k not in ["password_hash", "_id"]}
+    return {"access_token": access_token, "token_type": "bearer", "user": user_response}
+
+
+@app.post("/api/auth/forgot-password")
+async def forgot_password(request: ForgotPasswordRequest):
+    """
+    Initiates password reset process.
+    MOCKS email sending by printing token to console.
+    """
+    user = await db.users.find_one({"email": request.email})
+    if not user:
+        # Don't reveal valid emails for security, or do (for MVP ok)
+        # For now, we'll just return success to avoid enumeration, but log internally
+        return {"message": "If the email is registered, a password reset link has been sent."}
+
+    # Generate token
+    reset_token = str(uuid.uuid4())
+    # Expires in 1 hour
+    expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+
+    await db.users.update_one(
+        {"email": request.email},
+        {"$set": {"reset_token": reset_token, "reset_token_expiry": expiry}}
+    )
+
+    # MOCK EMAIL SENDING
+    print(f"============================================")
+    print(f" PASSWORD RESET REQUEST FOR: {request.email}")
+    print(f" TOKEN: {reset_token}")
+    print(f" LINK: http://localhost:5173/reset-password?token={reset_token}")
+    print(f"============================================")
+
+    return {"message": "If the email is registered, a password reset link has been sent."}
+
+
+@app.post("/api/auth/reset-password")
+async def reset_password(request: ResetPasswordRequest):
+    """Resets password using a valid token."""
+    user = await db.users.find_one({"reset_token": request.token})
+    
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid or expired token")
+
+    # Check expiry
+    # Ensure expiry is timezone-aware or comparable
+    expiry = user.get("reset_token_expiry")
+    if not expiry:
+         raise HTTPException(status_code=400, detail="Invalid or expired token")
+         
+    # Handle DB datetime (might be naive if not carefully stored, but we used timezone.utc)
+    # If using pymongo, it might return native datetime.
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+        
+    if datetime.now(timezone.utc) > expiry:
+        raise HTTPException(status_code=400, detail="Token expired")
+
+    # Update password
+    new_hash = get_password_hash(request.new_password)
+    
+    await db.users.update_one(
+        {"id": user["id"]},
+        {
+            "$set": {"password_hash": new_hash},
+            "$unset": {"reset_token": "", "reset_token_expiry": ""}
+        }
+    )
+    
+    await log_action(user["id"], "RESET_PASSWORD", "auth", ip_address="127.0.0.1")
+
+    return {"message": "Password has been reset successfully. You can now login."}
+
 
 @app.get("/api/auth/me")
 async def get_me(current_user: dict = Depends(get_current_user)):
