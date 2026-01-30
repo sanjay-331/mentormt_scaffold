@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+python-dotenv
+motor
+pydantic
+python-jose
+passlib
+bcrypt
+pandas
+python-multipart
+python-socketio
+reportlab
