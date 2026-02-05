@@ -32,9 +32,8 @@ from app.core.search import global_search
 from app.core.recommendations import recommend_mentors
 from app.core.audit import log_action
 from fastapi.responses import StreamingResponse
-
-
-
+from app.api.portfolio import router as portfolio_router
+from app.api.stats import router as stats_router
 
 
 ROOT_DIR = Path(__file__).parent
@@ -46,20 +45,18 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ["DB_NAME"]]
 
 # Security
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 43200  # 30 days
+# Security & Auth
+from app.core.auth import (
+    verify_password,
+    get_password_hash,
+    create_access_token,
+    get_current_user,
+    security
+)
 
-#pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-from passlib.context import CryptContext
-
-# Use PBKDF2-SHA256 instead of bcrypt to avoid Windows/bcrypt issues
-pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
-security = HTTPBearer()
-
-# Socket.IO setup
-# sio IS IMPORTED from app.sio_instance
 app = FastAPI(title="Student Mentor-Mentee System")
+app.include_router(portfolio_router)
+app.include_router(stats_router)
 socket_app = socketio.ASGIApp(sio, app)
 
 # app.add_middleware(
@@ -74,10 +71,10 @@ from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        # "http://localhost:5173",
-        # "http://127.0.0.1:5173",
-        # "http://localhost:5174",
-        # "http://127.0.0.1:5174",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
         "https://mentormt-scaffold.vercel.app",
     ],
     allow_credentials=True,
@@ -268,51 +265,7 @@ def remove_mongo_id(doc):
     return doc
 
 
-def verify_password(plain_password, hashed_password):
-    """Verifies a plain password against a hashed one."""  # C0116
-    return pwd_context.verify(plain_password, hashed_password)
-
-
-def get_password_hash(password):
-    """Generates a password hash."""  # C0116
-    return pwd_context.hash(password)
-
-
-def create_access_token(data: dict):
-    """Creates a JWT access token."""  # C0116
-    to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
-
-
-async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-):
-    """Dependency to get the current authenticated user from the JWT token."""
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        token = credentials.credentials
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: str = payload.get("sub")
-        if user_id is None:
-            raise credentials_exception
-    except JWTError as exc:  # Fix W0707 (raise-missing-from)
-        raise credentials_exception from exc
-
-    user = await db.users.find_one({"id": user_id})
-    if user is None:
-        raise credentials_exception
-
-    # Remove MongoDB ObjectId
-    if "_id" in user:
-        del user["_id"]
-    return user
+# Auth functions moved to app.core.auth
 
 
 # ==================== Socket.IO Events ====================

@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     DATABASE_URL: str = "sqlite:///./db.sqlite3"
     SECRET_KEY: str = "change_me"
+    JWT_SECRET_KEY: str = "change_me"
     CORS_ORIGINS: Union[List[str], str] = ["*"]
 
     # Add Mongo settings so they are parsed from .env
