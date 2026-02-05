@@ -8,8 +8,9 @@ from app.models.portfolio import (
     StudentLetter, LetterCreate,
     SportsActivity, SportsCreate,
     CulturalActivity, CulturalCreate,
-    PlacementPrediction
+    PlacementPrediction, PeerComparisonStats
 )
+from app.core.employability import calculate_student_analysis, calculate_peer_stats
 from pydantic import BaseModel
 from datetime import datetime, timezone
 
@@ -100,7 +101,32 @@ async def get_projects(
     projs = await db.projects.find({"student_id": student_id}, {"_id": 0}).to_list(100)
     return projs
 
-# --- Letters ---
+class ProjectFeedback(BaseModel):
+    score: float
+    feedback: str
+
+@router.patch("/projects/{project_id}/feedback")
+async def project_feedback(
+    project_id: str,
+    feedback: ProjectFeedback,
+    current_user: dict = Depends(get_current_user)
+):
+    if current_user["role"] not in ["mentor", "admin"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    result = await db.projects.update_one(
+        {"id": project_id},
+        {"$set": {
+            "mentor_score": feedback.score,
+            "mentor_feedback": feedback.feedback
+        }}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Project not found")
+        
+    return {"message": "Feedback submitted"}
+
 @router.post("/letters", response_model=StudentLetter)
 async def submit_letter(
     letter: LetterCreate,
@@ -227,6 +253,18 @@ async def get_cultural(
 
 
 # --- Placement Prediction (Phase 1: Rule Based) ---
+from app.core.employability import calculate_student_analysis, calculate_peer_stats
+from app.models.portfolio import (
+    StudentCertification, CertificationCreate,
+    StudentProject, ProjectCreate,
+    StudentLetter, LetterCreate,
+    SportsActivity, SportsCreate,
+    CulturalActivity, CulturalCreate,
+    PlacementPrediction, PeerComparisonStats
+)
+
+# ... (Previous imports remain, ensure PeerComparisonStats is imported)
+
 @router.get("/analysis/{student_id}", response_model=PlacementPrediction)
 async def get_placement_analysis(
     student_id: str,
@@ -249,10 +287,6 @@ async def get_all_students_analysis(
     
     results = []
     for s in students:
-        # Re-using the logic manually or calling a helper function would be better.
-        # calling the endpoint function directly is tricky due to dependency injection.
-        # I'll just clone the simple logic here for speed, or refactor to a helper.
-        # Refactoring to helper is safer.
         analysis = await calculate_student_analysis(s["id"])
         
         # Add student details to the response
@@ -264,74 +298,13 @@ async def get_all_students_analysis(
         
     return results
 
-async def calculate_student_analysis(student_id: str) -> PlacementPrediction:
-    # 1. Attendance
-    att_records = await db.attendance.find({"student_id": student_id}).to_list(1000)
-    total_classes = len(att_records)
-    present_classes = sum(1 for r in att_records if r["status"] == "present")
-    att_pct = (present_classes / total_classes * 100) if total_classes > 0 else 0
-    
-    # 2. Marks
-    marks_records = await db.marks.find({"student_id": student_id}).to_list(1000)
-    total_marks_pct = 0
-    valid_marks_count = 0
-    for m in marks_records:
-        if m.get("max_marks", 0) > 0:
-            total_marks_pct += (m["marks_obtained"] / m["max_marks"] * 100)
-            valid_marks_count += 1
-    avg_marks = (total_marks_pct / valid_marks_count) if valid_marks_count > 0 else 0
-    
-    # 3. Portfolio Counts
-    cert_count = await db.certifications.count_documents({"student_id": student_id})
-    project_count = await db.projects.count_documents({"student_id": student_id})
-    sports_count = await db.sports.count_documents({"student_id": student_id})
-    cultural_count = await db.cultural.count_documents({"student_id": student_id})
-    
-    # --- Prediction Logic (Rule Based) ---
-    eligibility = "Not Eligible"
-    risk_factors = []
-    improvement_areas = []
-    prob = 30.0 
-    
-    if att_pct >= 75: prob += 20
-    elif att_pct < 60:
-        risk_factors.append("Critical Low Attendance")
-        improvement_areas.append("Improve Attendance")
-    else: improvement_areas.append("Improve Attendance")
+@router.get("/stats/peer-comparison/{student_id}", response_model=List[PeerComparisonStats])
+async def get_peer_comparison(
+    student_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    if current_user["role"] == "student" and current_user["id"] != student_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
         
-    if avg_marks >= 60: prob += 20
-    elif avg_marks < 50:
-        risk_factors.append("Low Academic Performance")
-        improvement_areas.append("Focus on Academics")
-        
-    if cert_count > 0: prob += 10
-    else: improvement_areas.append("Get Certified")
-        
-    if project_count > 0: prob += 15
-    else: improvement_areas.append("Do Projects")
-        
-    if sports_count > 0 or cultural_count > 0: prob += 5
-        
-    prob = min(prob, 99.9)
-    if att_pct >= 60 and avg_marks >= 50 and (cert_count > 0 or project_count > 0):
-        eligibility = "Eligible"
-    else: eligibility = "Not Eligible / At Risk"
+    return await calculate_peer_stats(student_id)
 
-    s_att = min(att_pct, 100)
-    s_marks = min(avg_marks, 100)
-    s_certs = min(cert_count * 25, 100)
-    s_proj = min(project_count * 30, 100)
-    s_act = min((sports_count + cultural_count) * 20, 100)
-    
-    composite = (s_att * 0.20) + (s_marks * 0.25) + (s_certs * 0.15) + (s_proj * 0.15) + (s_act * 0.10) + 15
-    composite = min(composite, 100)
-
-    return PlacementPrediction(
-        student_id=student_id,
-        eligibility_status=eligibility,
-        placement_probability=round(prob, 1),
-        predicted_role="Software Engineer" if prob > 80 else "Trainee",
-        risk_factors=risk_factors,
-        improvement_areas=improvement_areas,
-        composite_score=round(composite, 1)
-    )

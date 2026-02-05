@@ -1,8 +1,7 @@
-// src/pages/StudentDashboard.jsx
-
 import React, { useEffect, useState, useCallback } from "react";
 import { useAuth } from "../context/AuthContext";
 import { getStudentStats } from "../services/stats";
+import { getPlacementAnalysis, getPeerComparison } from "../services/portfolio";
 import { getStudentAttendance } from "../services/attendance";
 import { getStudentMarks } from "../services/marks";
 import { getCirculars } from "../services/circulars";
@@ -113,6 +112,8 @@ import {
   Rocket,
   Target as TargetIcon2,
   Briefcase,
+  Brain,
+  ArrowUpRight,
 } from "lucide-react";
 
 import StudentPortfolio from "./StudentPortfolio";
@@ -122,6 +123,8 @@ const API_BASE_URL = "http://127.0.0.1:8000";
 export default function StudentDashboard() {
   const { user, logout } = useAuth();
   const [stats, setStats] = useState(null);
+  const [placement, setPlacement] = useState(null);
+  const [peerStats, setPeerStats] = useState(null);
   const [loadingStats, setLoadingStats] = useState(true);
   const [activeTab, setActiveTab] = useState("overview");
   const [notifications, setNotifications] = useState([]);
@@ -142,6 +145,18 @@ export default function StudentDashboard() {
       try {
         const data = await getStudentStats();
         setStats(data);
+        
+        if (user?.id) {
+            try {
+                const placementData = await getPlacementAnalysis(user.id);
+                setPlacement(placementData);
+                const peerData = await getPeerComparison(user.id);
+                setPeerStats(peerData);
+            } catch (err) {
+                console.error("Failed to load AI stats", err);
+            }
+        }
+
         setNotifications([
           { id: 1, title: "New feedback", message: "Your mentor gave you feedback", time: "10 min ago", type: "info", read: false },
           { id: 2, title: "Attendance alert", message: "Your attendance is below 75%", time: "1 hour ago", type: "warning", read: false },
@@ -154,8 +169,8 @@ export default function StudentDashboard() {
         setLoadingStats(false);
       }
     }
-    load();
-  }, []);
+    if (user) load(); // Added dependency on user
+  }, [user]);
 
   const handleExportData = () => {
     const exportData = {
@@ -393,6 +408,108 @@ export default function StudentDashboard() {
             </div>
           </div>
         </div>
+
+        {/* Employability Intelligence Section */}
+        {placement && (
+            <div className={`rounded-2xl p-6 mb-8 ${darkMode ? 'bg-gradient-to-r from-indigo-900 to-purple-900 border-indigo-700' : 'bg-gradient-to-r from-indigo-50 to-purple-50 border-indigo-100'} border shadow-lg`}>
+              <div className="flex flex-col lg:flex-row gap-8">
+                {/* Score Card */}
+                <div className="flex-1">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-xl font-bold flex items-center gap-2">
+                      <Brain className="w-6 h-6 text-indigo-500" />
+                      AI Employability Score
+                    </h3>
+                    <div className={`px-3 py-1 rounded-full text-sm font-semibold ${
+                      placement.prediction_confidence === 'High' ? 'bg-green-100 text-green-700' : 
+                      placement.prediction_confidence === 'Medium' ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700'
+                    }`}>
+                      {placement.prediction_confidence} Confidence
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center gap-6 mb-6">
+                    <div className="relative w-32 h-32 flex items-center justify-center">
+                       {/* Circular Progress Placeholder - using simple text for now */}
+                       <div className={`text-4xl font-bold ${placement.composite_score >= 85 ? 'text-green-500' : placement.composite_score >= 60 ? 'text-yellow-500' : 'text-red-500'}`}>
+                         {Math.round(placement.composite_score)}
+                       </div>
+                       <div className="absolute -bottom-2 text-xs opacity-75">/ 100</div>
+                    </div>
+                    
+                    <div>
+                      <div className="text-sm opacity-75 mb-1">Predicted Role</div>
+                      <div className="text-2xl font-bold text-indigo-400">{placement.predicted_role}</div>
+                      <div className="text-sm mt-2 flex items-center gap-2">
+                         Status: <span className="font-semibold">{placement.eligibility_status}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Breakdown */}
+                  <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                    <div className={`p-2 rounded-lg ${darkMode ? 'bg-black/20' : 'bg-white/50'}`}>
+                      <div className="opacity-75">Academics</div>
+                      <div className="font-bold">{placement.score_breakdown?.academics || 0}</div>
+                    </div>
+                    <div className={`p-2 rounded-lg ${darkMode ? 'bg-black/20' : 'bg-white/50'}`}>
+                      <div className="opacity-75">Skills</div>
+                      <div className="font-bold">{placement.score_breakdown?.certifications || 0}</div>
+                    </div>
+                    <div className={`p-2 rounded-lg ${darkMode ? 'bg-black/20' : 'bg-white/50'}`}>
+                      <div className="opacity-75">Projects</div>
+                      <div className="font-bold">{placement.score_breakdown?.projects || 0}</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Suggestions */}
+                <div className="flex-1 border-l border-indigo-200/20 pl-8">
+                  <h4 className="font-bold mb-4 flex items-center gap-2">
+                    <Target className="w-5 h-5 text-indigo-400" />
+                    Recommended Actions
+                  </h4>
+                  <div className="space-y-3">
+                    {placement.improvement_areas.map((area, idx) => (
+                      <div key={idx} className="flex items-start gap-3 p-3 rounded-lg bg-white/5 border border-white/10">
+                        <ArrowUpRight className="w-5 h-5 text-indigo-400 shrink-0 mt-0.5" />
+                        <span className="text-sm">{area}</span>
+                      </div>
+                    ))}
+                    {placement.improvement_areas.length === 0 && (
+                       <div className="text-sm opacity-75">Great job! Keep maintaining your stats.</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+        )}
+
+        {/* Peer Comparison Chart Section */}
+        {peerStats && (
+            <div className={`rounded-xl p-6 mb-8 ${darkMode ? 'bg-gray-800' : 'bg-white'} shadow-sm border ${darkMode ? 'border-gray-700' : 'border-slate-200'}`}>
+                <h3 className="font-bold mb-6 flex items-center gap-2">
+                    <Users className="w-5 h-5 text-blue-500" />
+                    Where do I stand? (Peer Comparison)
+                </h3>
+                <div className="h-64">
+                    <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={peerStats}>
+                            <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? '#374151' : '#e2e8f0'} />
+                            <XAxis dataKey="category" stroke={darkMode ? '#9ca3af' : '#64748b'} />
+                            <YAxis />
+                            <Tooltip 
+                                contentStyle={darkMode ? { backgroundColor: '#1f2937', border: '1px solid #374151' } : {}}
+                            />
+                            <Legend />
+                            <Bar dataKey="student_score" name="Me" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
+                            <Bar dataKey="class_average" name="Class Avg" fill="#9ca3af" radius={[4, 4, 0, 0]} />
+                            <Bar dataKey="top_10_percent_average" name="Top 10%" fill="#10b981" radius={[4, 4, 0, 0]} />
+                        </BarChart>
+                    </ResponsiveContainer>
+                </div>
+            </div>
+        )}
 
         {/* Stats Cards Grid */}
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">

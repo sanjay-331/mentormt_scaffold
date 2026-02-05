@@ -36,6 +36,7 @@ class StudentProject(BaseModel):
     project_link: Optional[str] = None # GitHub/Demo
     project_type: str # Mini, Major, Hackathon, Personal
     mentor_score: Optional[float] = None
+    mentor_feedback: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class ProjectCreate(BaseModel):
@@ -108,4 +109,14 @@ class PlacementPrediction(BaseModel):
     risk_factors: List[str] = []
     improvement_areas: List[str] = []
     composite_score: float = 0.0
+    # Production Readiness Fields
+    prediction_confidence: str = "Low" # Low, Medium, High
+    score_breakdown: dict = {} # Detailed score composition
+    growth_index: str = "Stagnant" # Improving, Stagnant, Declining
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class PeerComparisonStats(BaseModel):
+    category: str # Attendance, Marks, Certifications, Projects
+    student_score: float
+    class_average: float
+    top_10_percent_average: float

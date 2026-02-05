@@ -59,15 +59,6 @@ app.include_router(portfolio_router)
 app.include_router(stats_router)
 socket_app = socketio.ASGIApp(sio, app)
 
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
-#     allow_credentials=True,
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
-from fastapi.middleware.cors import CORSMiddleware
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.environ.get("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,https://mentormt-scaffold.vercel.app").split(","),
@@ -82,175 +73,17 @@ logger = logging.getLogger(__name__)
 
 # ==================== Models ====================
 
+from app.models.user import (
+    UserBase, UserCreate, User, ForgotPasswordRequest, ResetPasswordRequest, Token,
+    MentorAssignment, AssignmentPayload, Rating, Feedback, FeedbackCreate
+)
 
-class UserBase(BaseModel):
-    """Base user schema."""
-
-    email: EmailStr
-    full_name: str
-    role: str  # admin, mentor, student
-
-
-class UserCreate(UserBase):
-    """Schema for user registration."""
-
-    password: str
+from app.models.academic import (
+    AttendanceCreate, AttendanceRecord, MarksRecord, MarksCreate
+)
 
 
-class User(UserBase):
-    """Database schema for a User."""
-
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    phone: Optional[str] = None
-    department: Optional[str] = None
-    semester: Optional[int] = None
-    usn: Optional[str] = None  # For students
-    employee_id: Optional[str] = None  # For mentors
-    settings: Dict[str, Any] = Field(default_factory=dict)
-    reset_token: Optional[str] = None
-    reset_token_expiry: Optional[datetime] = None
-
-
-
-class ForgotPasswordRequest(BaseModel):
-    """Schema for forgot password request."""
-    email: EmailStr
-
-
-class ResetPasswordRequest(BaseModel):
-    """Schema for reset password request."""
-    token: str
-    new_password: str
-
-
-class Token(BaseModel):
-    """Schema for the returned JWT token."""
-
-    access_token: str
-    token_type: str
-    user: Dict[str, Any]
-    
-   
-class MentorAssignment(BaseModel):
-    """Schema for mentor-student assignment records."""
-
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    mentor_id: str
-    student_ids: List[str]
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    
-    
-class AssignmentPayload(BaseModel):
-    mentor_id: str
-    student_ids: List[str]
-        
-
-class AttendanceCreate(BaseModel):
-    student_id: str
-    subject: str
-    date: str
-    status: str  # present, absent, leave
-
-
-class AttendanceRecord(BaseModel):
-    """Schema for an individual attendance record."""
-
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    student_id: str
-    subject: str
-    date: str
-    status: str  # present, absent, leave
-    recorded_by: str
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-    
-class MarksRecord(BaseModel):
-    """Schema for an individual marks record."""
-
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    student_id: str
-    subject: str
-    semester: int
-    marks_type: str  # IA1, IA2, IA3, Assignment, VTU
-    marks_obtained: float
-    max_marks: float
-    recorded_by: str
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-
-class MarksCreate(BaseModel):
-    """Payload schema for creating marks from API."""
-    student_id: str
-    subject: str
-    semester: int
-    marks_type: str  # IA1, IA2, IA3, Assignment, VTU
-    marks_obtained: float
-    max_marks: float
-
-
-class FeedbackCreate(BaseModel):
-    student_id: str
-    feedback_text: str
-
-
-class Feedback(BaseModel):
-    """Schema for mentor feedback on students."""
-
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    mentor_id: str
-    student_id: str
-    feedback_text: str
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-
-class Message(BaseModel):
-    """Schema for chat messages."""
-
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    sender_id: str
-    receiver_id: str
-    content: str
-    is_read: bool = False
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-
-class Circular(BaseModel):
-    """Schema for college circulars/notices."""
-
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    author_id: str
-    title: str
-    content: str
-    file_url: Optional[str] = None
-    target_audience: str  # all, students, mentors, specific
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-
-class CircularCreate(BaseModel):
-    title: str
-    content: str
-    target_audience: str  # all, students, mentors, specific
-
-
-class Rating(BaseModel):
-    """Schema for student performance ratings."""
-
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    student_id: str
-    mentor_id: str
-    attendance_rating: float
-    marks_rating: float
-    overall_rating: float
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+from app.models.communication import Message, Circular, CircularCreate
 
 
 def remove_mongo_id(doc):

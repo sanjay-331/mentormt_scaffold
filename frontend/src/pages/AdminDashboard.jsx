@@ -13,7 +13,12 @@ import {
 } from "../services/users";
 import { saveAssignment } from "../services/assignments";
 import { getCirculars, createCircular } from "../services/circulars";
-const API_BASE_URL = "http://127.0.0.1:8000";
+import { getAllStudentsAnalysis } from "../services/portfolio"; // Added
+import {
+  getAdminOverview,
+  getMentorLoad,
+  getStudentsByDepartment,
+} from "../services/adminStats"; // Added this mostly likely missing import too based on usage
 import {
   BarChart,
   Bar,
@@ -65,12 +70,8 @@ import {
   Cpu,
   Award,
 } from "lucide-react";
-import {
-  getAdminOverview,
-  getMentorLoad,
-  getStudentsByDepartment,
-} from "../services/adminStats";
-import { getAllStudentsAnalysis } from "../services/portfolio";
+
+const API_BASE_URL = "http://127.0.0.1:8000";
 
 export default function AdminDashboard() {
   const { user, logout } = useAuth();
