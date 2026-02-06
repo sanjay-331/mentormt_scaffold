@@ -14,7 +14,8 @@ from typing import List, Optional, Dict, Any
 # --- Third-Party Imports ---
 import pandas as pd
 import socketio
-from app.sio_instance import sio, connected_users
+from app.sio_instance import sio
+import app.sio_events # Register Socket.IO events
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Depends, status, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,7 +35,10 @@ from app.core.audit import log_action
 from fastapi.responses import StreamingResponse
 from app.api.portfolio import router as portfolio_router
 from app.api.stats import router as stats_router
-
+from app.api.activity import router as activity_router
+from app.api.master import router as master_router
+from app.api.assignments import router as assignments_router
+from app.api.notifications import router as notifications_router
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -57,6 +61,10 @@ from app.core.auth import (
 app = FastAPI(title="Student Mentor-Mentee System")
 app.include_router(portfolio_router)
 app.include_router(stats_router)
+app.include_router(activity_router)
+app.include_router(master_router)
+app.include_router(assignments_router)
+app.include_router(notifications_router)
 socket_app = socketio.ASGIApp(sio, app)
 
 app.add_middleware(
@@ -97,59 +105,7 @@ def remove_mongo_id(doc):
 
 # ==================== Socket.IO Events ====================
 
-# connected_users is imported from app.sio_instance
-
-
-@sio.event
-async def connect(sid, _environ):  # Fix W0613 (unused-argument)
-    """Handles new client connections."""
-    logger.info("Client connected: %s", sid)  # Fix W1203 (logging-fstring)
-
-
-@sio.event
-async def disconnect(sid):
-    """Handles client disconnections."""
-    logger.info("Client disconnected: %s", sid)  # Fix W1203
-    # Remove from connected users
-    for user_id, user_sid in list(connected_users.items()):
-        if user_sid == sid:
-            del connected_users[user_id]
-            break
-
-
-@sio.event
-async def authenticate(sid, data):
-    """Authenticates a user for Socket.IO."""
-    user_id = data.get("user_id")
-    if user_id:
-        connected_users[user_id] = sid
-        logger.info(
-            "User %s authenticated with sid %s", user_id, sid
-        )  # Removed E501 comment fix
-
-
-@sio.event
-async def send_message(sid, data):
-    """Handles sending a new chat message."""
-    message_data = {
-        "id": str(uuid.uuid4()),
-        "sender_id": data["sender_id"],
-        "receiver_id": data["receiver_id"],
-        "content": data["content"],
-        "is_read": False,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-
-    # Save to database
-    await db.messages.insert_one(message_data)
-
-    # Emit to receiver if online
-    receiver_sid = connected_users.get(data["receiver_id"])
-    if receiver_sid:
-        await sio.emit("new_message", message_data, room=receiver_sid)
-
-    # Emit back to sender
-    await sio.emit("message_sent", message_data, room=sid)
+# Events are registered in app.sio_events which is imported above
 
 
 # ==================== API Routes ====================
@@ -435,95 +391,7 @@ async def delete_user(
     return {"message": "User deleted successfully"}
 
 
-# # Mentor Assignment Routes
-# @app.post("/api/assignments")
-# async def create_assignment(
-#     payload: AssignmentPayload,
-#     current_user: dict = Depends(get_current_user),
-# ):
-#     """Creates a new mentor assignment (Admin only)."""
-#     if current_user["role"] != "admin":
-#         raise HTTPException(status_code=403, detail="Not authorized")
 
-#     mentor_id = payload.mentor_id
-#     student_ids = payload.student_ids
-
-#     # Remove existing assignment for this mentor
-#     await db.assignments.delete_many({"mentor_id": mentor_id})
-
-#     assignment = MentorAssignment(mentor_id=mentor_id, student_ids=student_ids)
-#     assignment_data = assignment.model_dump()
-#     assignment_data["created_at"] = assignment_data["created_at"].isoformat()
-
-#     await db.assignments.insert_one(assignment_data)
-#     return assignment_data
-@app.post("/api/assignments")
-async def create_assignment(
-    payload: AssignmentPayload,
-    current_user: dict = Depends(get_current_user),
-):
-    """Creates a new mentor assignment (Admin only)."""
-    if current_user["role"] != "admin":
-        raise HTTPException(status_code=403, detail="Not authorized")
-
-    mentor_id = payload.mentor_id
-    student_ids = payload.student_ids
-
-    # Remove existing assignment for this mentor
-    await db.assignments.delete_many({"mentor_id": mentor_id})
-
-    # Build assignment using Pydantic model
-    assignment = MentorAssignment(mentor_id=mentor_id, student_ids=student_ids)
-    assignment_data = assignment.dict()
-    assignment_data["created_at"] = assignment_data["created_at"].isoformat()
-
-    # Insert into MongoDB
-    result = await db.assignments.insert_one(assignment_data)
-
-    # Add string version of MongoDB ObjectId if needed
-    assignment_data["mongo_id"] = str(result.inserted_id)
-
-    # SAFETY: Remove raw ObjectId and DB _id if present
-    assignment_data.pop("_id", None)
-
-    await log_action(current_user["id"], "CREATE", "assignment", {"mentor_id": mentor_id, "student_count": len(student_ids)})
-
-    return assignment_data
-
-@app.get("/api/assignments/mentor/{mentor_id}")
-async def get_mentor_students(
-    mentor_id: str, current_user: dict = Depends(get_current_user)
-):  # E501 fix
-    """Gets all students assigned to a specific mentor."""
-    assignment = await db.assignments.find_one({"mentor_id": mentor_id}, {"_id": 0})
-    if not assignment:
-        return {"students": []}
-
-    students = await db.users.find(
-        {"id": {"$in": assignment["student_ids"]}, "role": "student"},
-        {"_id": 0, "password_hash": 0},
-    ).to_list(
-        100
-    )  # E501 fix
-
-    return {"students": students}
-
-
-@app.get("/api/assignments/student/{student_id}")
-async def get_student_mentor(
-    student_id: str, current_user: dict = Depends(get_current_user)
-):  # E501 fix
-    """Gets the mentor assigned to a specific student."""
-    assignment = await db.assignments.find_one({"student_ids": student_id}, {"_id": 0})
-
-    if not assignment:
-        return {"mentor": None}
-
-    mentor = await db.users.find_one(
-        {"id": assignment["mentor_id"]}, {"_id": 0, "password_hash": 0}
-    )
-
-    return {"mentor": mentor}
 
 
 # Attendance Routes
@@ -914,6 +782,16 @@ async def create_circular(
     )
     
     await log_action(current_user["id"], "CREATE", "circular", {"title": title, "audience": target_audience})
+
+    # Emit live notification
+    # Note: Ideally execute based on audience rooms, broadcasting for MVP
+    await sio.emit("notification", {
+        "title": f"New Circular: {title}",
+        "message": f"New notice for {target_audience}",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "type": "info",
+        "link": "/circulars"
+    })
 
     return data
 

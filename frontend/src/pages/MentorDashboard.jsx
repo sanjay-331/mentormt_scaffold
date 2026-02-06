@@ -13,7 +13,10 @@ import {
 } from "../services/attendance";
 import { uploadMarks, createMarksRecord } from "../services/marks";
 import { getCirculars } from "../services/circulars";
-const API_BASE_URL = "http://127.0.0.1:8000";
+import { getRecentActivity } from "../services/activity";
+import { getSubjects } from "../services/master";
+import { getNotifications, markNotificationAsRead as apiMarkRead, clearAllNotifications as apiClearAll } from "../services/notifications";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 import {
   BarChart,
   Bar,
@@ -86,6 +89,8 @@ export default function MentorDashboard() {
   const [activeTab, setActiveTab] = useState("overview");
   const [notifications, setNotifications] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
+  const [recentActivity, setRecentActivity] = useState([]);
+  const [loadingActivity, setLoadingActivity] = useState(true);
   const [darkMode, setDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('darkMode') === 'true';
@@ -102,12 +107,12 @@ export default function MentorDashboard() {
       try {
         const data = await getMentorStats();
         setStats(data);
-        setNotifications([
-          { id: 1, title: "New feedback received", message: "Student John submitted feedback", time: "10 min ago", type: "info", read: false },
-          { id: 2, title: "Attendance reminder", message: "Mark attendance for today", time: "1 hour ago", type: "warning", read: false },
-          { id: 3, title: "Marks uploaded", message: "IA1 marks uploaded successfully", time: "3 hours ago", type: "success", read: true },
-          { id: 4, title: "New circular", message: "VTU exam schedule published", time: "1 day ago", type: "info", read: true },
-        ]);
+        try {
+            const notifs = await getNotifications();
+            setNotifications(notifs || []);
+        } catch (err) {
+            console.error("Failed to load notifications", err);
+        }
       } catch (e) {
         console.error("Failed to load mentor stats", e);
       } finally {
@@ -115,7 +120,34 @@ export default function MentorDashboard() {
       }
     }
     load();
+    loadActivity();
   }, []);
+
+  const loadActivity = async () => {
+    try {
+      setLoadingActivity(true);
+      const data = await getRecentActivity();
+      setRecentActivity(data || []);
+    } catch (err) {
+      console.error("Failed to load activity", err);
+    } finally {
+      setLoadingActivity(false);
+    }
+  };
+
+  const formatTimeAgo = (dateString) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const seconds = Math.floor((now - date) / 1000);
+    
+    if (seconds < 60) return "just now";
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  };
 
   const handleExportData = () => {
     const exportData = {
@@ -168,14 +200,24 @@ export default function MentorDashboard() {
     reportWindow.document.close();
   };
 
-  const markNotificationAsRead = (id) => {
-    setNotifications(prev => prev.map(notif => 
-      notif.id === id ? { ...notif, read: true } : notif
-    ));
+  const markNotificationAsRead = async (id) => {
+    try {
+        await apiMarkRead(id);
+        setNotifications(prev => prev.map(notif => 
+          notif.id === id || notif.mongo_id === id ? { ...notif, read: true } : notif
+        ));
+    } catch (err) {
+        console.error("Failed to mark read", err);
+    }
   };
 
-  const clearAllNotifications = () => {
-    setNotifications([]);
+  const clearAllNotifications = async () => {
+    try {
+        await apiClearAll();
+        setNotifications([]);
+    } catch (err) {
+        console.error("Failed to clear notifications", err);
+    }
   };
 
   const filteredNotifications = notifications.filter(notif => 
@@ -251,7 +293,7 @@ export default function MentorDashboard() {
                         <div 
                           key={notif.id} 
                           className={`p-3 border-b border-gray-700 last:border-b-0 cursor-pointer hover:bg-gray-700 transition ${!notif.read ? 'bg-gray-700/50' : ''}`}
-                          onClick={() => markNotificationAsRead(notif.id)}
+                          onClick={() => markNotificationAsRead(notif.id || notif.mongo_id)}
                         >
                           <div className="flex items-start space-x-3">
                             <div className={`p-1.5 rounded-full mt-0.5 ${
@@ -271,7 +313,7 @@ export default function MentorDashboard() {
                                 {notif.message}
                               </p>
                               <div className="text-[10px] opacity-60 mt-1">
-                                {notif.time}
+                                {formatTimeAgo(notif.created_at)}
                               </div>
                             </div>
                           </div>
@@ -502,34 +544,24 @@ export default function MentorDashboard() {
               </button>
             </div>
             <div className="space-y-4">
-              <ActivityItem
-                title="Feedback submitted"
-                time="10 minutes ago"
-                student="John Doe"
-                type="feedback"
-                darkMode={darkMode}
-              />
-              <ActivityItem
-                title="Attendance marked"
-                time="1 hour ago"
-                student="Math class"
-                type="attendance"
-                darkMode={darkMode}
-              />
-              <ActivityItem
-                title="Marks uploaded"
-                time="3 hours ago"
-                student="IA1 results"
-                type="marks"
-                darkMode={darkMode}
-              />
-              <ActivityItem
-                title="New circular"
-                time="Yesterday"
-                student="VTU schedule"
-                type="circular"
-                darkMode={darkMode}
-              />
+              {loadingActivity ? (
+                <div className="text-center py-4 opacity-50 text-sm">Loading activity...</div>
+              ) : recentActivity.length === 0 ? (
+                <div className="text-center py-4 opacity-50 text-sm">No recent activity</div>
+              ) : (
+                recentActivity.map((item, idx) => (
+                  <ActivityItem
+                    key={idx}
+                    title={item.title}
+                    time={new Date(item.time).toLocaleString(undefined, {
+                       month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+                    })}
+                    student={item.user || "System"}
+                    type={item.type || 'info'}
+                    darkMode={darkMode}
+                  />
+                ))
+              )}
             </div>
           </div>
         </div>
@@ -848,6 +880,13 @@ function ActivityItem({ title, time, student, type, darkMode }) {
     attendance: '📝',
     marks: '📊',
     circular: '📢',
+    feedback: '💬',
+    attendance: '📝',
+    marks: '📊',
+    circular: '📢',
+    user: '👤',
+    alert: '⚠️',
+    info: 'ℹ️',
   };
 
   return (
@@ -1286,6 +1325,31 @@ function MentorAttendance({ darkMode }) {
   const [manualSaving, setManualSaving] = useState(false);
   const [manualMessage, setManualMessage] = useState("");
   const [manualError, setManualError] = useState("");
+  const [availableSubjects, setAvailableSubjects] = useState([]);
+
+  // Fetch subjects when student changes
+  useEffect(() => {
+    async function loadSubjects() {
+        if (!manualStudentId) {
+            setAvailableSubjects([]);
+            return;
+        }
+        const student = students.find(s => s.id === manualStudentId);
+        if (student && student.branch && student.department) {
+            try {
+                // Now expects (branch, department)
+                const subs = await getSubjects(student.branch, student.department);
+                setAvailableSubjects(subs || []);
+            } catch (e) {
+                console.error("Failed to load subjects", e);
+                setAvailableSubjects([]);
+            }
+        } else {
+            setAvailableSubjects([]);
+        }
+    }
+    loadSubjects();
+  }, [manualStudentId, students]);
 
   useEffect(() => {
     async function load() {
@@ -1538,18 +1602,24 @@ function MentorAttendance({ darkMode }) {
               </select>
             </div>
 
-            <div>
-              <label className="block text-xs font-medium mb-1">
-                Subject *
-              </label>
-              <input
-                type="text"
-                value={manualSubject}
-                onChange={(e) => setManualSubject(e.target.value)}
-                className={`w-full rounded-lg px-3 py-2 text-sm border ${darkMode ? 'bg-gray-700 border-gray-600' : 'bg-white border-slate-300'} focus:outline-none focus:ring-2 focus:ring-teal-500`}
-                placeholder="e.g. Math"
-              />
-            </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">
+                  Subject *
+                </label>
+                <select
+                  value={manualSubject}
+                  onChange={(e) => setManualSubject(e.target.value)}
+                  disabled={!manualStudentId || availableSubjects.length === 0}
+                  className={`w-full rounded-lg px-3 py-2 text-sm border ${darkMode ? 'bg-gray-700 border-gray-600' : 'bg-white border-slate-300'} focus:outline-none focus:ring-2 focus:ring-teal-500`}
+                >
+                  <option value="">
+                    {availableSubjects.length > 0 ? "-- Select Subject --" : (manualStudentId ? "No subjects found" : "-- Select Student First --")}
+                  </option>
+                  {availableSubjects.map((sub, idx) => (
+                    <option key={idx} value={sub}>{sub}</option>
+                  ))}
+                </select>
+              </div>
 
             <div>
               <label className="block text-xs font-medium mb-1">
@@ -1820,6 +1890,39 @@ function MentorMarks({ darkMode }) {
   const [saving, setSaving] = useState(false);
   const [manualMessage, setManualMessage] = useState("");
   const [manualError, setManualError] = useState("");
+  const [availableSubjects, setAvailableSubjects] = useState([]);
+
+  // Auto-fill semester and fetch subjects when student selected
+  useEffect(() => {
+     if (studentId) {
+        const student = students.find(s => s.id === studentId);
+        if (student && student.semester) {
+            setSemester(student.semester);
+        }
+     }
+  }, [studentId, students]);
+
+  // Fetch subjects when semester or student (dept) changes
+  useEffect(() => {
+    async function loadSubjects() {
+        if (!studentId || !semester) {
+            setAvailableSubjects([]);
+            return;
+        }
+        const student = students.find(s => s.id === studentId);
+        if (student && student.branch && student.department) {
+            try {
+                // Now expects (branch, department)
+                const subs = await getSubjects(student.branch, student.department);
+                setAvailableSubjects(subs || []);
+            } catch (e) {
+                console.error("Failed to load subs", e);
+                setAvailableSubjects([]);
+            }
+        }
+    }
+    loadSubjects();
+  }, [studentId, semester, students]);
 
   useEffect(() => {
     async function load() {
@@ -2078,13 +2181,19 @@ function MentorMarks({ darkMode }) {
               <label className="block text-xs font-medium mb-1">
                 Subject *
               </label>
-              <input
-                type="text"
+              <select
                 value={subject}
                 onChange={(e) => setSubject(e.target.value)}
+                disabled={!studentId || !semester || availableSubjects.length === 0}
                 className={`w-full rounded-lg px-3 py-2 text-sm border ${darkMode ? 'bg-gray-700 border-gray-600' : 'bg-white border-slate-300'} focus:outline-none focus:ring-2 focus:ring-teal-500`}
-                placeholder="e.g. Math"
-              />
+              >
+                  <option value="">
+                    {availableSubjects.length > 0 ? "-- Select Subject --" : (studentId ? "No subjects found" : "-- Select Student First --")}
+                  </option>
+                  {availableSubjects.map((sub, idx) => (
+                    <option key={idx} value={sub}>{sub}</option>
+                  ))}
+              </select>
             </div>
 
             <div>
@@ -2094,7 +2203,7 @@ function MentorMarks({ darkMode }) {
               <input
                 type="number"
                 min="1"
-                max="10"
+                max="8"
                 value={semester}
                 onChange={(e) => setSemester(e.target.value)}
                 className={`w-full rounded-lg px-3 py-2 text-sm border ${darkMode ? 'bg-gray-700 border-gray-600' : 'bg-white border-slate-300'} focus:outline-none focus:ring-2 focus:ring-teal-500`}

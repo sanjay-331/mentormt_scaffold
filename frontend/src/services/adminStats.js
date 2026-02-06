@@ -18,3 +18,9 @@ export async function getStudentsByDepartment() {
   const res = await api.get("/api/stats/admin/students-by-department");
   return res.data;
 }
+
+// User growth (12 months)
+export async function getUserGrowth() {
+  const res = await api.get("/api/stats/admin/user-growth");
+  return res.data;
+}

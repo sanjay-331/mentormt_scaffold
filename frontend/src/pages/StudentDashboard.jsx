@@ -1,13 +1,15 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { useAuth } from "../context/AuthContext";
-import { getStudentStats } from "../services/stats";
+import { getStudentStats, getStudentPerformance } from "../services/stats";
 import { getPlacementAnalysis, getPeerComparison } from "../services/portfolio";
 import { getStudentAttendance } from "../services/attendance";
 import { getStudentMarks } from "../services/marks";
 import { getCirculars } from "../services/circulars";
+import { getRecentActivity } from "../services/activity";
 import { getStudentTimeline } from "../services/timeline";
 import { getAcademicHistory } from "../services/history";
 import { downloadReport } from "../services/reports";
+import { getNotifications, markNotificationAsRead as apiMarkRead, clearAllNotifications as apiClearAll } from "../services/notifications";
 
 import {
   LineChart,
@@ -118,7 +120,8 @@ import {
 
 import StudentPortfolio from "./StudentPortfolio";
 
-const API_BASE_URL = "http://127.0.0.1:8000";
+  import { getNotifications, markNotificationAsRead as apiMarkRead, clearAllNotifications as apiClearAll } from "../services/notifications";
+  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 export default function StudentDashboard() {
   const { user, logout } = useAuth();
@@ -129,6 +132,8 @@ export default function StudentDashboard() {
   const [activeTab, setActiveTab] = useState("overview");
   const [notifications, setNotifications] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
+  const [recentActivity, setRecentActivity] = useState([]);
+  const [loadingActivity, setLoadingActivity] = useState(true);
   const [darkMode, setDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('darkMode') === 'true';
@@ -146,6 +151,24 @@ export default function StudentDashboard() {
         const data = await getStudentStats();
         setStats(data);
         
+        try {
+          const activityData = await getRecentActivity();
+          setRecentActivity(activityData || []);
+        } catch (err) {
+            console.error("Failed to load activity", err);
+        } finally {
+            setLoadingActivity(false);
+        }
+        
+        try {
+          const activityData = await getRecentActivity();
+          setRecentActivity(activityData || []);
+        } catch (err) {
+            console.error("Failed to load activity", err);
+        } finally {
+            setLoadingActivity(false);
+        }
+        
         if (user?.id) {
             try {
                 const placementData = await getPlacementAnalysis(user.id);
@@ -157,12 +180,13 @@ export default function StudentDashboard() {
             }
         }
 
-        setNotifications([
-          { id: 1, title: "New feedback", message: "Your mentor gave you feedback", time: "10 min ago", type: "info", read: false },
-          { id: 2, title: "Attendance alert", message: "Your attendance is below 75%", time: "1 hour ago", type: "warning", read: false },
-          { id: 3, title: "Marks updated", message: "IA1 marks have been published", time: "3 hours ago", type: "success", read: true },
-          { id: 4, title: "New circular", message: "VTU exam schedule published", time: "1 day ago", type: "info", read: true },
-        ]);
+        // Load real notifications
+        try {
+            const notifs = await getNotifications();
+            setNotifications(notifs || []);
+        } catch (err) {
+            console.error("Failed to load notifications", err);
+        }
       } catch (e) {
         console.error("Failed to load student stats", e);
       } finally {
@@ -171,6 +195,20 @@ export default function StudentDashboard() {
     }
     if (user) load(); // Added dependency on user
   }, [user]);
+
+  const formatTimeAgo = (dateString) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const seconds = Math.floor((now - date) / 1000);
+    
+    if (seconds < 60) return "just now";
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  };
 
   const handleExportData = () => {
     const exportData = {
@@ -210,14 +248,33 @@ export default function StudentDashboard() {
     alert("Certificate download started!\n\nYour course completion certificate is being generated.\n\nNote: This is a frontend demo.");
   };
 
-  const markNotificationAsRead = (id) => {
-    setNotifications(prev => prev.map(notif => 
-      notif.id === id ? { ...notif, read: true } : notif
-    ));
+  const markNotificationAsRead = async (id) => {
+    try {
+        await apiMarkRead(id);
+        setNotifications(prev => prev.map(notif => 
+          notif.id === id || notif.mongo_id === id ? { ...notif, read: true } : notif
+        ));
+    } catch (err) {
+        console.error("Failed to mark read", err);
+    }
   };
 
-  const clearAllNotifications = () => {
-    setNotifications([]);
+  const clearAllNotifications = async () => {
+    try {
+        await apiClearAll();
+        setNotifications([]);
+    } catch (err) {
+        console.error("Failed to clear notifications", err);
+    }
+  };
+
+  const handleNotificationClick = (notif) => {
+    markNotificationAsRead(notif.id || notif.mongo_id);
+    if (notif.link === "/circulars") {
+      setActiveTab("circulars");
+    } else if (notif.link === "/student/feedback") {
+      setActiveTab("timeline"); // Assuming feedback shows in timeline
+    }
   };
 
   const filteredNotifications = notifications.filter(notif => 
@@ -275,8 +332,8 @@ export default function StudentDashboard() {
                   )}
                 </button>
                 
-                <div id="student-notifications-panel" className="hidden absolute right-0 mt-2 w-80 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50">
-                  <div className="p-4 border-b border-gray-700">
+                <div id="student-notifications-panel" className={`hidden absolute right-0 mt-2 w-80 rounded-xl shadow-xl z-50 border ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-slate-200'}`}>
+                  <div className={`p-4 border-b ${darkMode ? 'border-gray-700' : 'border-slate-100'}`}>
                     <div className="flex items-center justify-between">
                       <h3 className="font-semibold">Notifications</h3>
                       <button 
@@ -292,14 +349,18 @@ export default function StudentDashboard() {
                       filteredNotifications.map(notif => (
                         <div 
                           key={notif.id} 
-                          className={`p-3 border-b border-gray-700 last:border-b-0 cursor-pointer hover:bg-gray-700 transition ${!notif.read ? 'bg-gray-700/50' : ''}`}
-                          onClick={() => markNotificationAsRead(notif.id)}
+                          className={`p-3 border-b last:border-b-0 cursor-pointer transition ${
+                            darkMode 
+                              ? `border-gray-700 hover:bg-gray-700 ${!notif.read ? 'bg-gray-700/50' : ''}` 
+                              : `border-slate-100 hover:bg-slate-50 ${!notif.read ? 'bg-blue-50/50' : ''}`
+                          }`}
+                          onClick={() => handleNotificationClick(notif)}
                         >
                           <div className="flex items-start space-x-3">
                             <div className={`p-1.5 rounded-full mt-0.5 ${
-                              notif.type === 'warning' ? 'bg-amber-500/20 text-amber-400' :
-                              notif.type === 'success' ? 'bg-emerald-500/20 text-emerald-400' :
-                              'bg-blue-500/20 text-blue-400'
+                              notif.type === 'warning' ? (darkMode ? 'bg-amber-500/20 text-amber-400' : 'bg-amber-100 text-amber-700') :
+                              notif.type === 'success' ? (darkMode ? 'bg-emerald-500/20 text-emerald-400' : 'bg-emerald-100 text-emerald-700') :
+                              (darkMode ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-100 text-blue-700')
                             }`}>
                               {notif.type === 'warning' ? <AlertCircle className="w-3 h-3" /> :
                                notif.type === 'success' ? <CheckCircle className="w-3 h-3" /> :
@@ -313,11 +374,11 @@ export default function StudentDashboard() {
                                 {notif.message}
                               </p>
                               <div className="text-[10px] opacity-60 mt-1">
-                                {notif.time}
+                                {formatTimeAgo(notif.created_at)}
                               </div>
-                            </div>
                           </div>
                         </div>
+                      </div>
                       ))
                     ) : (
                       <div className="p-4 text-center text-sm opacity-75">
@@ -691,45 +752,35 @@ export default function StudentDashboard() {
             </div>
           </div>
 
-          {/* Upcoming Deadlines */}
+          {/* Recent Activity */}
           <div className={`rounded-2xl ${darkMode ? 'bg-gray-800' : 'bg-white'} shadow-lg p-6`}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold">
-                Upcoming Deadlines
+                Recent Activity
               </h3>
               <button className="text-sm text-emerald-400 hover:text-emerald-300">
                 View all
               </button>
             </div>
             <div className="space-y-4">
-              <DeadlineItem
-                title="IA2 Submission"
-                subject="Mathematics"
-                date="2024-03-15"
-                daysLeft={3}
-                darkMode={darkMode}
-              />
-              <DeadlineItem
-                title="Project Review"
-                subject="Computer Science"
-                date="2024-03-20"
-                daysLeft={8}
-                darkMode={darkMode}
-              />
-              <DeadlineItem
-                title="Assignment"
-                subject="Physics"
-                date="2024-03-25"
-                daysLeft={13}
-                darkMode={darkMode}
-              />
-              <DeadlineItem
-                title="VTU Exam"
-                subject="All Subjects"
-                date="2024-04-10"
-                daysLeft={29}
-                darkMode={darkMode}
-              />
+              {loadingActivity ? (
+                <div className="text-center py-4 opacity-50 text-sm">Loading activity...</div>
+              ) : recentActivity.length === 0 ? (
+                <div className="text-center py-4 opacity-50 text-sm">No recent activity</div>
+              ) : (
+                recentActivity.map((item, idx) => (
+                  <ActivityItem
+                    key={idx}
+                    title={item.title}
+                    time={new Date(item.time).toLocaleString(undefined, {
+                       month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+                    })}
+                    student={item.user || "System"}
+                    type={item.type || 'info'}
+                    darkMode={darkMode}
+                  />
+                ))
+              )}
             </div>
           </div>
         </div>
@@ -766,29 +817,24 @@ export default function StudentDashboard() {
 
 function StudentOverview({ darkMode, stats }) {
   const [performanceChart, setPerformanceChart] = useState([]);
+
   const [subjectDistribution, setSubjectDistribution] = useState([]);
+  const [academicSummary, setAcademicSummary] = useState(null);
 
   useEffect(() => {
-    // Mock performance data
-    const performanceData = [
-      { month: 'Jan', attendance: 78, marks: 72 },
-      { month: 'Feb', attendance: 82, marks: 75 },
-      { month: 'Mar', attendance: 85, marks: 78 },
-      { month: 'Apr', attendance: 88, marks: 81 },
-      { month: 'May', attendance: 90, marks: 85 },
-      { month: 'Jun', attendance: 92, marks: 88 },
-    ];
-    
-    const subjectData = [
-      { subject: 'Math', attendance: 85, marks: 78, color: '#0d9488' },
-      { subject: 'Physics', attendance: 92, marks: 82, color: '#3b82f6' },
-      { subject: 'Chemistry', attendance: 88, marks: 75, color: '#8b5cf6' },
-      { subject: 'CS', attendance: 95, marks: 88, color: '#10b981' },
-      { subject: 'English', attendance: 90, marks: 80, color: '#f59e0b' },
-    ];
-
-    setPerformanceChart(performanceData);
-    setSubjectDistribution(subjectData);
+    async function loadPerformance() {
+      try {
+        const data = await getStudentPerformance();
+        if (data) {
+            setPerformanceChart(data.performance_chart || []);
+            setSubjectDistribution(data.subject_distribution || []);
+            setAcademicSummary(data.academic_summary);
+        }
+      } catch (err) {
+        console.error("Failed to load performance data", err);
+      }
+    }
+    loadPerformance();
   }, []);
 
   return (
@@ -903,30 +949,30 @@ function StudentOverview({ darkMode, stats }) {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <SummaryCard
             title="Total Classes"
-            value="128"
-            change="+12"
-            trend="up"
+            value={academicSummary?.total_classes || 0}
+            change="Current"
+            trend="neutral"
             darkMode={darkMode}
           />
           <SummaryCard
             title="Present Days"
-            value="112"
-            change="+8"
-            trend="up"
+            value={academicSummary?.present_days || 0}
+            change={academicSummary ? `${Math.round((academicSummary.present_days / academicSummary.total_classes) * 100) || 0}%` : "0%"}
+            trend={academicSummary && (academicSummary.present_days / academicSummary.total_classes) > 0.75 ? "up" : "warning"}
             darkMode={darkMode}
           />
           <SummaryCard
             title="Tests Taken"
-            value="18"
-            change="+3"
+            value={academicSummary?.tests_taken || 0}
+            change="Completed"
             trend="up"
             darkMode={darkMode}
           />
           <SummaryCard
             title="Assignments"
-            value="7/10"
-            change="2 pending"
-            trend="warning"
+            value={academicSummary?.assignments_submitted || 0}
+            change="Submitted"
+            trend="neutral"
             darkMode={darkMode}
           />
         </div>
@@ -2659,4 +2705,35 @@ function buildMarksChartData(marks) {
     const percentage = m.max_marks > 0 ? Math.round((m.marks_obtained / m.max_marks) * 100) : 0;
     return { label, percentage };
   });
+}
+
+function ActivityItem({ title, time, student, type, darkMode }) {
+  const typeIcons = {
+    feedback: '💬',
+    attendance: '📝',
+    marks: '📊',
+    circular: '📢',
+    user: '👤',
+    alert: '⚠️',
+    info: 'ℹ️',
+  };
+
+  return (
+    <div className={`flex items-center justify-between p-3 rounded-lg ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-slate-50'} transition`}>
+      <div className="flex items-center space-x-3">
+        <div className="text-xl">
+          {typeIcons[type] || '📌'}
+        </div>
+        <div>
+          <h5 className="font-medium text-sm">
+            {title}
+          </h5>
+          <p className="text-xs opacity-75">
+            {student} • {time}
+          </p>
+        </div>
+      </div>
+      <ChevronRight className="w-4 h-4 opacity-50" />
+    </div>
+  );
 }

@@ -16,25 +16,30 @@ function PrivateRoute({ children }) {
   return children;
 }
 
+import ChatWidget from "./components/ChatWidget";
+
 export default function App() {
   return (
-    <Routes>
-      <Route path="/login" element={<Login />} />
-      <Route path="/register" element={<Register />} />
-      <Route path="/forgot-password" element={<ForgotPassword />} />
-      <Route path="/reset-password" element={<ResetPassword />} />
+    <>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
 
-      <Route
-        path="/"
-        element={
-          <PrivateRoute>
-            <Dashboard />
-          </PrivateRoute>
-        }
-      />
+        <Route
+          path="/"
+          element={
+            <PrivateRoute>
+              <Dashboard />
+            </PrivateRoute>
+          }
+        />
 
-      {/* Fallback */}
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+        {/* Fallback */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+      <ChatWidget />
+    </>
   );
 }

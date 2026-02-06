@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import {
   getCertifications, addCertification, verifyCertification,
-  getProjects, addProject,
+  getProjects, addProject, rateProject,
   getLetters, submitLetter, replyToLetter,
   getSports, addSports,
   getCultural, addCultural,
@@ -253,6 +253,10 @@ function CertificationsView({ data, refresh, darkMode, isMentor }) {
 function ProjectsView({ data, refresh, darkMode, isMentor }) {
     const [showForm, setShowForm] = useState(false);
     const [form, setForm] = useState({ title: "", description: "", role: "", project_type: "Mini", tech_stack: "" });
+    
+    // Rating State
+    const [ratingId, setRatingId] = useState(null);
+    const [ratingForm, setRatingForm] = useState({ score: 5, feedback: "" });
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -262,6 +266,16 @@ function ProjectsView({ data, refresh, darkMode, isMentor }) {
             setForm({ title: "", description: "", role: "", project_type: "Mini", tech_stack: "" });
             refresh();
         } catch (err) { alert("Failed to add project"); }
+    };
+
+    const handleRate = async (e) => {
+        e.preventDefault();
+        try {
+            await rateProject(ratingId, ratingForm);
+            setRatingId(null);
+            setRatingForm({ score: 5, feedback: "" });
+            refresh();
+        } catch (err) { alert("Failed to submit rating"); }
     };
 
     return (
@@ -301,8 +315,24 @@ function ProjectsView({ data, refresh, darkMode, isMentor }) {
                 {data.map(p => (
                     <div key={p.id} className={`p-4 rounded-xl border ${darkMode ? 'border-gray-700 bg-gray-700/50' : 'border-slate-100 bg-slate-50'}`}>
                         <div className="flex justify-between items-start">
-                             <div className="font-semibold text-lg">{p.title}</div>
-                             <span className="text-xs px-2 py-1 rounded bg-blue-500/10 text-blue-500 border border-blue-500/20">{p.project_type}</span>
+                             <div>
+                                <div className="font-semibold text-lg">{p.title}</div>
+                                <span className="text-xs px-2 py-1 rounded bg-blue-500/10 text-blue-500 border border-blue-500/20">{p.project_type}</span>
+                             </div>
+                             <div>
+                                {p.mentor_score ? (
+                                    <div className="text-right">
+                                        <div className="text-lg font-bold text-amber-500">★ {p.mentor_score}/5</div>
+                                        <div className="text-xs opacity-75">{p.mentor_feedback}</div>
+                                    </div>
+                                ) : isMentor ? (
+                                    <button onClick={() => setRatingId(p.id)} className="text-xs bg-emerald-500 text-white px-3 py-1 rounded hover:bg-emerald-600">
+                                        Rate Project
+                                    </button>
+                                ) : (
+                                    <span className="text-xs text-amber-500 bg-amber-500/10 px-2 py-1 rounded">Not Rated</span>
+                                )}
+                             </div>
                         </div>
                         <p className="text-sm opacity-75 mt-1">{p.description}</p>
                         <div className="flex flex-wrap gap-2 mt-3">
@@ -310,6 +340,25 @@ function ProjectsView({ data, refresh, darkMode, isMentor }) {
                                 <span key={i} className="text-xs px-2 py-0.5 rounded-full bg-gray-500/10 border border-gray-500/20 opacity-75">{t}</span>
                             ))}
                         </div>
+
+                        {ratingId === p.id && (
+                             <form onSubmit={handleRate} className="mt-4 p-4 rounded-xl border border-emerald-500/30 bg-emerald-500/5">
+                                 <h4 className="font-semibold mb-3 text-sm">Rate this Project</h4>
+                                 <div className="flex gap-4 mb-3">
+                                     <label className="flex items-center gap-2">
+                                         <span className="text-sm">Score (1-5):</span>
+                                         <input type="number" min="1" max="5" step="0.5" className={`w-20 px-2 py-1 rounded border ${darkMode ? 'bg-gray-800 border-gray-600' : 'bg-white border-slate-300'}`}
+                                            value={ratingForm.score} onChange={e => setRatingForm({...ratingForm, score: e.target.value})} />
+                                     </label>
+                                 </div>
+                                 <textarea placeholder="Feedback..." className={inputClass(darkMode) + " mb-3"} required
+                                    value={ratingForm.feedback} onChange={e => setRatingForm({...ratingForm, feedback: e.target.value})} />
+                                 <div className="flex justify-end gap-2">
+                                     <button type="button" onClick={() => setRatingId(null)} className="text-sm px-3 py-1 opacity-75 hover:opacity-100">Cancel</button>
+                                     <button type="submit" className="text-sm bg-emerald-500 text-white px-4 py-1.5 rounded hover:bg-emerald-600">Submit Rating</button>
+                                 </div>
+                             </form>
+                        )}
                     </div>
                 ))}
             </div>

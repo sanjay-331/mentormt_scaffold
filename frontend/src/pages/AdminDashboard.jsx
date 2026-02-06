@@ -15,10 +15,13 @@ import { saveAssignment } from "../services/assignments";
 import { getCirculars, createCircular } from "../services/circulars";
 import { getAllStudentsAnalysis } from "../services/portfolio"; // Added
 import {
-  getAdminOverview,
   getMentorLoad,
   getStudentsByDepartment,
-} from "../services/adminStats"; // Added this mostly likely missing import too based on usage
+  getUserGrowth,
+  getAdminOverview, // Added
+} from "../services/adminStats";
+import { getBranches, getDepartments } from "../services/master"; // Added
+import { getRecentActivity } from "../services/activity"; // Added activity service
 import {
   BarChart,
   Bar,
@@ -36,6 +39,8 @@ import {
   AreaChart,
   Area,
 } from "recharts";
+import { getNotifications, markNotificationAsRead as apiMarkRead, clearAllNotifications as apiClearAll } from "../services/notifications"; 
+
 import {
   Users,
   UserCheck,
@@ -76,11 +81,16 @@ const API_BASE_URL = "http://127.0.0.1:8000";
 export default function AdminDashboard() {
   const { user, logout } = useAuth();
   const [stats, setStats] = useState(null);
+  const [deptData, setDeptData] = useState([]);
+  const [growthData, setGrowthData] = useState([]);
   const [loadingStats, setLoadingStats] = useState(true);
   const [activeTab, setActiveTab] = useState("overview");
   const [notifications, setNotifications] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [dateRange, setDateRange] = useState("today");
+  const [recentActivity, setRecentActivity] = useState([]); // State for activity feed
+  const [loadingActivity, setLoadingActivity] = useState(true); // State for activity loading
+  const [hasMoreActivity, setHasMoreActivity] = useState(true); // Pagination state
   const [darkMode, setDarkMode] = useState(() => {
     // Check localStorage for saved theme preference
     if (typeof window !== 'undefined') {
@@ -91,21 +101,27 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     // Save dark mode preference
-    localStorage.setItem('darkMode', darkMode.toString());
-  }, [darkMode]);
+// Remove the misplaced import
+// (It was inserted around line 105 in previous messy edit, but let's just make sure we add it to the top correctly first)
 
-  useEffect(() => {
     async function load() {
       try {
-        const data = await getAdminStats();
-        setStats(data);
-        // Generate mock notifications (will be replaced with real data when available)
-        setNotifications([
-          { id: 1, title: "New student registration", message: "John Doe registered as student", time: "5 min ago", type: "info", read: false },
-          { id: 2, title: "Mentor assignment needed", message: "3 students pending mentor assignment", time: "1 hour ago", type: "warning", read: false },
-          { id: 3, title: "Circular published", message: "New circular published successfully", time: "2 hours ago", type: "success", read: true },
-          { id: 4, title: "System update available", message: "New update ready for installation", time: "1 day ago", type: "info", read: true },
+        const [statsData, deptStats, growthStats] = await Promise.all([
+            getAdminStats(),
+            getStudentsByDepartment(),
+            getUserGrowth()
         ]);
+        setStats(statsData);
+        setDeptData(deptStats || []);
+        setGrowthData(growthStats || []);
+        
+        // Load real notifications
+        try {
+            const notifs = await getNotifications();
+            setNotifications(notifs || []);
+        } catch (err) {
+            console.error("Failed to load notifications", err);
+        }
       } catch (e) {
         console.error("Failed to load admin stats", e);
       } finally {
@@ -113,8 +129,57 @@ export default function AdminDashboard() {
       }
     }
     load();
+    loadActivity(true);
   }, []);
 
+
+
+  const loadActivity = async (reset = false) => {
+    try {
+      setLoadingActivity(true);
+      const limit = 10;
+      const skip = reset ? 0 : recentActivity.length;
+      
+      const data = await getRecentActivity(limit, skip);
+      
+      if (!data || data.length < limit) {
+          setHasMoreActivity(false);
+      } else {
+          setHasMoreActivity(true);
+      }
+      
+      if (reset) {
+        setRecentActivity(data || []);
+      } else {
+        setRecentActivity(prev => [...prev, ...(data || [])]);
+      }
+    } catch (err) {
+      console.error("Failed to load activity", err);
+    } finally {
+      setLoadingActivity(false);
+    }
+  };
+
+  const markNotificationAsRead = async (id) => {
+    try {
+        await apiMarkRead(id);
+        setNotifications(prev => prev.map(notif => 
+          notif.id === id || notif.mongo_id === id ? { ...notif, read: true } : notif
+        ));
+    } catch (err) {
+        console.error("Failed to mark read", err);
+    }
+  };
+
+  const clearAllNotifications = async () => {
+    try {
+        await apiClearAll();
+        setNotifications([]);
+    } catch (err) {
+        console.error("Failed to clear notifications", err);
+    }
+  };
+  
   const handleExportData = () => {
     // Frontend export functionality
     const exportData = {
@@ -134,15 +199,19 @@ export default function AdminDashboard() {
     linkElement.click();
     document.body.removeChild(linkElement);
   };
-
-  const markNotificationAsRead = (id) => {
-    setNotifications(prev => prev.map(notif => 
-      notif.id === id ? { ...notif, read: true } : notif
-    ));
-  };
-
-  const clearAllNotifications = () => {
-    setNotifications([]);
+  
+  const formatTimeAgo = (dateString) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const seconds = Math.floor((now - date) / 1000);
+    
+    if (seconds < 60) return "just now";
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
   };
 
   const handleBulkImport = () => {
@@ -255,8 +324,8 @@ export default function AdminDashboard() {
                   )}
                 </button>
                 
-                <div id="notifications-panel" className="hidden absolute right-0 mt-2 w-80 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50">
-                  <div className="p-4 border-b border-gray-700">
+                <div id="notifications-panel" className={`hidden absolute right-0 mt-2 w-80 rounded-xl shadow-xl z-50 border ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-slate-200'}`}>
+                  <div className={`p-4 border-b ${darkMode ? 'border-gray-700' : 'border-slate-100'}`}>
                     <div className="flex items-center justify-between">
                       <h3 className="font-semibold">Notifications</h3>
                       <button 
@@ -272,14 +341,18 @@ export default function AdminDashboard() {
                       filteredNotifications.map(notif => (
                         <div 
                           key={notif.id} 
-                          className={`p-3 border-b border-gray-700 last:border-b-0 cursor-pointer hover:bg-gray-700 transition ${!notif.read ? 'bg-gray-700/50' : ''}`}
-                          onClick={() => markNotificationAsRead(notif.id)}
+                          className={`p-3 border-b last:border-b-0 cursor-pointer transition ${
+                            darkMode 
+                              ? `border-gray-700 hover:bg-gray-700 ${!notif.read ? 'bg-gray-700/50' : ''}` 
+                              : `border-slate-100 hover:bg-slate-50 ${!notif.read ? 'bg-indigo-50/50' : ''}`
+                          }`}
+                          onClick={() => markNotificationAsRead(notif.id || notif.mongo_id)}
                         >
                           <div className="flex items-start space-x-3">
                             <div className={`p-1.5 rounded-full mt-0.5 ${
-                              notif.type === 'warning' ? 'bg-amber-500/20 text-amber-400' :
-                              notif.type === 'success' ? 'bg-emerald-500/20 text-emerald-400' :
-                              'bg-blue-500/20 text-blue-400'
+                              notif.type === 'warning' ? (darkMode ? 'bg-amber-500/20 text-amber-400' : 'bg-amber-100 text-amber-700') :
+                              notif.type === 'success' ? (darkMode ? 'bg-emerald-500/20 text-emerald-400' : 'bg-emerald-100 text-emerald-700') :
+                              (darkMode ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-100 text-blue-700')
                             }`}>
                               {notif.type === 'warning' ? <AlertCircle className="w-3 h-3" /> :
                                notif.type === 'success' ? <CheckCircle className="w-3 h-3" /> :
@@ -293,7 +366,7 @@ export default function AdminDashboard() {
                                 {notif.message}
                               </p>
                               <div className="text-[10px] opacity-60 mt-1">
-                                {notif.time}
+                                {formatTimeAgo(notif.created_at)}
                               </div>
                             </div>
                           </div>
@@ -496,7 +569,7 @@ export default function AdminDashboard() {
 
             {/* Tab Content */}
             <div className="p-6">
-              {activeTab === "overview" && <OverviewTab darkMode={darkMode} stats={stats} />}
+              {activeTab === "overview" && <OverviewTab darkMode={darkMode} stats={stats} deptData={deptData} growthData={growthData} />}
               {activeTab === "users" && <AdminUsers darkMode={darkMode} />}
               {activeTab === "assignments" && <AdminAssignments darkMode={darkMode} />}
               {activeTab === "circulars" && <AdminCirculars darkMode={darkMode} />}
@@ -510,39 +583,46 @@ export default function AdminDashboard() {
               <h3 className="text-lg font-bold">
                 Recent Activity
               </h3>
-              <button className="text-sm text-indigo-400 hover:text-indigo-300">
-                View all
+              <button onClick={() => loadActivity(true)} className="text-sm text-indigo-400 hover:text-indigo-300">
+                <RefreshCw className="w-4 h-4" />
               </button>
             </div>
             <div className="space-y-4">
-              <ActivityItem
-                title="New student registered"
-                time="10 minutes ago"
-                user="John Doe"
-                type="user"
-                darkMode={darkMode}
-              />
-              <ActivityItem
-                title="Circular published"
-                time="1 hour ago"
-                user="Dr. Smith"
-                type="circular"
-                darkMode={darkMode}
-              />
-              <ActivityItem
-                title="Mentor assignment completed"
-                time="3 hours ago"
-                user="Prof. Johnson"
-                type="assignment"
-                darkMode={darkMode}
-              />
-              <ActivityItem
-                title="System backup completed"
-                time="Yesterday"
-                user="System"
-                type="system"
-                darkMode={darkMode}
-              />
+              {loadingActivity ? (
+                <div className="text-center py-4">
+                   <div className={`inline-block h-6 w-6 animate-spin rounded-full border-2 border-solid border-current border-r-transparent align-[-0.125em] ${darkMode ? 'text-gray-600' : 'text-slate-300'}`} />
+                   <p className="mt-2 text-xs opacity-75">Loading activity...</p>
+                </div>
+              ) : recentActivity.length === 0 ? (
+                <div className="text-center py-4 text-sm opacity-50">
+                  No recent activity found.
+                </div>
+              ) : (
+                recentActivity.map((item, idx) => (
+                  <ActivityItem
+                    key={idx}
+                    title={item.title}
+                    time={new Date(item.time).toLocaleString(undefined, {
+                      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+                    })}
+                    user={item.user || "System"}
+                    type={item.type || 'system'}
+                    darkMode={darkMode}
+                  />
+                ))
+              )}
+              {hasMoreActivity && !loadingActivity && recentActivity.length > 0 && (
+                <button 
+                    onClick={() => loadActivity(false)}
+                    className={`w-full py-2 text-sm text-center border rounded-lg transition ${
+                        darkMode 
+                        ? 'border-gray-700 text-gray-400 hover:bg-gray-700 hover:text-white' 
+                        : 'border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-700'
+                    }`}
+                >
+                    Load More
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -577,25 +657,23 @@ export default function AdminDashboard() {
   );
 }
 
-function OverviewTab({ darkMode, stats }) {
+function OverviewTab({ darkMode, stats, deptData, growthData }) {
   const [timeFilter, setTimeFilter] = useState('month');
   
-  // These charts use mock data that will be replaced when real data is available
-  const userGrowthData = [
-    { month: 'Jan', students: 65, mentors: 12 },
-    { month: 'Feb', students: 78, mentors: 14 },
-    { month: 'Mar', students: 90, mentors: 16 },
-    { month: 'Apr', students: 110, mentors: 18 },
-    { month: 'May', students: 130, mentors: 20 },
-    { month: 'Jun', students: 145, mentors: 22 },
+  // Use real data or fallback
+  const userGrowthData = growthData && growthData.length > 0 ? growthData : [
+    { month: 'Jan', students: 0, mentors: 0 },
+    { month: 'Feb', students: 0, mentors: 0 }
   ];
 
-  const departmentDistribution = [
-    { name: 'CSE', value: stats?.total_students ? Math.floor(stats.total_students * 0.35) : 35, color: '#6366f1' },
-    { name: 'ECE', value: stats?.total_students ? Math.floor(stats.total_students * 0.25) : 25, color: '#8b5cf6' },
-    { name: 'EEE', value: stats?.total_students ? Math.floor(stats.total_students * 0.20) : 20, color: '#10b981' },
-    { name: 'MECH', value: stats?.total_students ? Math.floor(stats.total_students * 0.15) : 15, color: '#f59e0b' },
-    { name: 'CIVIL', value: stats?.total_students ? Math.floor(stats.total_students * 0.05) : 5, color: '#ef4444' },
+  const colors = ['#6366f1', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#06b6d4'];
+  
+  const departmentDistribution = deptData && deptData.length > 0 ? deptData.map((d, i) => ({
+    name: d.department || 'Unknown',
+    value: d.count || 0,
+    color: colors[i % colors.length]
+  })) : [
+    { name: 'No Data', value: 1, color: '#e2e8f0' }
   ];
 
   const handleTimeFilterChange = (filter) => {
@@ -646,7 +724,7 @@ function OverviewTab({ darkMode, stats }) {
               ))}
             </div>
           </div>
-          <div className="h-64">
+          <div className="h-64 min-h-[250px] w-full">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={userGrowthData}>
                 <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? '#374151' : '#e2e8f0'} />
@@ -704,7 +782,7 @@ function OverviewTab({ darkMode, stats }) {
           <h3 className="font-semibold mb-5">
             Department Distribution
           </h3>
-          <div className="h-64">
+          <div className="h-64 min-h-[250px] w-full">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -936,9 +1014,41 @@ function AdminUsers({ darkMode }) {
   const [selectedUsers, setSelectedUsers] = useState([]);
   const [searchUserQuery, setSearchUserQuery] = useState("");
 
+  // Academic Hierarchy State
+  const [branches, setBranches] = useState({}); // Grouped by category
+  const [departmentList, setDepartmentList] = useState([]); 
+
   useEffect(() => {
     loadUsers();
+    loadBranches();
   }, [roleFilter]);
+
+  async function loadBranches() {
+    try {
+      const data = await getBranches();
+      setBranches(data || {});
+    } catch(e) {
+      console.error("Failed to load branches", e);
+    }
+  }
+
+  // Effect to load departments when branch changes in form
+  useEffect(() => {
+    async function fetchDepts() {
+      if (form.branch) {
+        try {
+          const depts = await getDepartments(form.branch);
+          setDepartmentList(depts || []);
+        } catch (e) {
+           console.error("Failed to load departments", e);
+           setDepartmentList([]);
+        }
+      } else {
+        setDepartmentList([]);
+      }
+    }
+    fetchDepts();
+  }, [form.branch]);
 
   async function loadUsers() {
     setLoading(true);
@@ -963,6 +1073,7 @@ function AdminUsers({ darkMode }) {
       email: "",
       role: "student",
       password: "",
+      branch: "", // New
       department: "",
       semester: "",
       usn: "",
@@ -979,6 +1090,7 @@ function AdminUsers({ darkMode }) {
       email: u.email || "",
       role: u.role || "student",
       password: "",
+      branch: u.branch || "", // New
       department: u.department || "",
       semester: u.semester ?? "",
       usn: u.usn || "",
@@ -1340,14 +1452,41 @@ function AdminUsers({ darkMode }) {
 
               <div>
                 <label className="block text-xs font-medium mb-1">
+                  Branch (Degree)
+                </label>
+                <select
+                  name="branch"
+                  value={form.branch}
+                  onChange={handleChange}
+                  className={`w-full rounded-lg px-3 py-2 text-sm border ${darkMode ? 'bg-gray-700 border-gray-600' : 'bg-white border-slate-300'} focus:outline-none focus:ring-2 focus:ring-indigo-500`}
+                >
+                  <option value="">Select Branch</option>
+                  {Object.entries(branches).map(([category, degreeList]) => (
+                    <optgroup key={category} label={category}>
+                      {degreeList.map(deg => (
+                        <option key={deg} value={deg}>{deg}</option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium mb-1">
                   Department
                 </label>
-                <input
+                <select
                   name="department"
                   value={form.department}
                   onChange={handleChange}
-                  className={`w-full rounded-lg px-3 py-2 text-sm border ${darkMode ? 'bg-gray-700 border-gray-600' : 'bg-white border-slate-300'} focus:outline-none focus:ring-2 focus:ring-indigo-500`}
-                />
+                  disabled={!form.branch}
+                  className={`w-full rounded-lg px-3 py-2 text-sm border ${darkMode ? 'bg-gray-700 border-gray-600' : 'bg-white border-slate-300'} focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50`}
+                >
+                  <option value="">Select Department</option>
+                  {departmentList.map(dept => (
+                    <option key={dept} value={dept}>{dept}</option>
+                  ))}
+                </select>
               </div>
 
               {form.role === "student" && (
@@ -1859,7 +1998,7 @@ function AdminAnalytics({ darkMode }) {
           <section className="space-y-6">
             
             {activeChart === "mentorLoad" && (
-                <div className={`rounded-xl ${darkMode ? 'bg-gray-800' : 'bg-white'} p-5 border ${darkMode ? 'border-gray-700' : 'border-slate-200'} h-96`}>
+                <div className={`rounded-xl ${darkMode ? 'bg-gray-800' : 'bg-white'} p-5 border ${darkMode ? 'border-gray-700' : 'border-slate-200'} h-96 min-h-[300px] w-full`}>
                     <h3 className="text-sm font-semibold mb-4">Students per Mentor</h3>
                     <ResponsiveContainer width="100%" height="100%">
                         <BarChart data={mentorLoad.slice(0, 8)}>
@@ -1883,7 +2022,7 @@ function AdminAnalytics({ darkMode }) {
             )}
 
             {activeChart === "department" && (
-                <div className={`rounded-xl ${darkMode ? 'bg-gray-800' : 'bg-white'} p-5 border ${darkMode ? 'border-gray-700' : 'border-slate-200'} h-96`}>
+                <div className={`rounded-xl ${darkMode ? 'bg-gray-800' : 'bg-white'} p-5 border ${darkMode ? 'border-gray-700' : 'border-slate-200'} h-96 min-h-[300px] w-full`}>
                     <h3 className="text-sm font-semibold mb-4">Students by Department</h3>
                     <ResponsiveContainer width="100%" height="100%">
                         <BarChart data={deptStats}>

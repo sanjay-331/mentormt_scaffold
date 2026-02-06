@@ -14,6 +14,11 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     """Schema for user registration."""
     password: str
+    college: Optional[str] = None
+    branch: Optional[str] = None  # NEW
+    department: Optional[str] = None
+    semester: Optional[int] = None
+    usn: Optional[str] = None
 
 class User(UserBase):
     """Database schema for a User."""
@@ -21,6 +26,8 @@ class User(UserBase):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     phone: Optional[str] = None
+    college: Optional[str] = None
+    branch: Optional[str] = None # NEW
     department: Optional[str] = None
     semester: Optional[int] = None
     usn: Optional[str] = None  # For students

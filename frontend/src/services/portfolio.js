@@ -31,6 +31,13 @@ export async function addProject(data) {
   return res.data;
 }
 
+export async function rateProject(id, feedbackData) {
+  const res = await api.patch(`/api/portfolio/projects/${id}/feedback`, feedbackData);
+  return res.data;
+}
+
+
+
 // --- Letters ---
 export async function getLetters(studentId) {
   const res = await api.get(`/api/portfolio/letters/${studentId}`);
