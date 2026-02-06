@@ -16,7 +16,7 @@ import { getCirculars } from "../services/circulars";
 import { getRecentActivity } from "../services/activity";
 import { getSubjects } from "../services/master";
 import { getNotifications, markNotificationAsRead as apiMarkRead, clearAllNotifications as apiClearAll } from "../services/notifications";
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+
 import {
   BarChart,
   Bar,
@@ -81,6 +81,8 @@ import {
 } from "lucide-react";
 import { getMentorMenteesPerformance } from "../services/mentorStats";
 import StudentPortfolio from "./StudentPortfolio";
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 export default function MentorDashboard() {
   const { user, logout } = useAuth();
@@ -880,10 +882,7 @@ function ActivityItem({ title, time, student, type, darkMode }) {
     attendance: '📝',
     marks: '📊',
     circular: '📢',
-    feedback: '💬',
-    attendance: '📝',
-    marks: '📊',
-    circular: '📢',
+
     user: '👤',
     alert: '⚠️',
     info: 'ℹ️',

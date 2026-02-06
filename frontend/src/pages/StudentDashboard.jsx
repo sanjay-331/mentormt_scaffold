@@ -120,8 +120,8 @@ import {
 
 import StudentPortfolio from "./StudentPortfolio";
 
-  import { getNotifications, markNotificationAsRead as apiMarkRead, clearAllNotifications as apiClearAll } from "../services/notifications";
-  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 export default function StudentDashboard() {
   const { user, logout } = useAuth();
