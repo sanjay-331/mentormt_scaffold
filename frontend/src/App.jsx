@@ -17,6 +17,7 @@ function PrivateRoute({ children }) {
 }
 
 import ChatWidget from "./components/ChatWidget";
+import { Toaster } from 'react-hot-toast';
 
 export default function App() {
   return (
@@ -40,6 +41,7 @@ export default function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       <ChatWidget />
+      <Toaster position="top-right" />
     </>
   );
 }

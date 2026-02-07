@@ -90,3 +90,38 @@ async def get_student_mentor(
     )
 
     return {"mentor": mentor}
+
+@router.get("/mapping")
+async def get_assignment_mapping(current_user: dict = Depends(get_current_user)):
+    """
+    Returns a mapping of all students who are currently assigned to a mentor.
+    Format: { student_id: { mentor_id: str, mentor_name: str } }
+    """
+    if current_user["role"] not in ["admin", "mentor"]:
+         raise HTTPException(status_code=403, detail="Not authorized")
+
+    # Fetch all assignments
+    assignments = await db.assignments.find({}, {"_id": 0}).to_list(1000)
+    
+    mapping = {}
+    
+    # We need mentor names, so let's fetch all mentors or just the ones needed. 
+    # Valid optimization: fetch all mentors in one go.
+    mentor_ids = list(set(a["mentor_id"] for a in assignments))
+    mentors = await db.users.find(
+        {"id": {"$in": mentor_ids}}, 
+        {"id": 1, "full_name": 1, "_id": 0}
+    ).to_list(1000)
+    
+    mentor_map = {m["id"]: m["full_name"] for m in mentors}
+
+    for a in assignments:
+        m_id = a["mentor_id"]
+        m_name = mentor_map.get(m_id, "Unknown Mentor")
+        for s_id in a["student_ids"]:
+            mapping[s_id] = {
+                "mentor_id": m_id,
+                "mentor_name": m_name
+            }
+            
+    return mapping

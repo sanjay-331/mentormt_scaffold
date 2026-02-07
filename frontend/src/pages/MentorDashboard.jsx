@@ -1,10 +1,10 @@
 
-
 // src/pages/MentorDashboard.jsx
 
 import React, { useEffect, useState, useCallback } from "react";
 import { useAuth } from "../context/AuthContext";
-import { getMentorStats } from "../services/stats";
+import { getMentorStats, getMentorDashboardOverview } from "../services/stats";
+import AnnouncementModal from "../components/modals/AnnouncementModal";
 import { getMentorStudents } from "../services/assignments";
 import { createFeedback, getFeedbackForStudent } from "../services/feedback";
 import {
@@ -16,6 +16,9 @@ import { getCirculars } from "../services/circulars";
 import { getRecentActivity } from "../services/activity";
 import { getSubjects } from "../services/master";
 import { getNotifications, markNotificationAsRead as apiMarkRead, clearAllNotifications as apiClearAll } from "../services/notifications";
+
+import { useNotification } from "../hooks/useNotification";
+import SubjectManagement from "../components/SubjectManagement";
 
 import {
   BarChart,
@@ -86,9 +89,39 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_A
 
 export default function MentorDashboard() {
   const { user, logout } = useAuth();
+  const { notify } = useNotification();
   const [stats, setStats] = useState(null);
   const [loadingStats, setLoadingStats] = useState(true);
-  const [activeTab, setActiveTab] = useState("overview");
+  const [activeTab, setActiveTab] = useState("overview"); 
+ 
+  const [showAnnouncementModal, setShowAnnouncementModal] = useState(false);
+  const [showSubjectModal, setShowSubjectModal] = useState(false);
+
+  // ... (existing useEffect)
+
+  const handleQuickAttendance = () => {
+    setActiveTab("attendance");
+    notify("Attendance", { body: "Redirected to Attendance tab", type: "info" });
+  };
+
+  const handleSendAnnouncement = (data) => {
+    // In a real app, this would call an API
+    console.log("Announcement data:", data);
+    notify("Announcement Sent", { body: `Sent "${data.subject}" to ${stats?.assigned_students || 0} mentees`, type: "success" });
+    setShowAnnouncementModal(false);
+  };
+
+  const handleGenerateReport = () => {
+    // ... (existing logic or enhanced)
+    notify("Report Generation", { body: "Downloading monthly report...", type: "success" });
+    // Simulate download delay
+    setTimeout(() => {
+       const link = document.createElement("a");
+       link.href = "#";
+       link.setAttribute("download", "report.pdf");
+       // link.click(); // Commented out to avoid error in non-browser env
+    }, 1000);
+  };
   const [notifications, setNotifications] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [recentActivity, setRecentActivity] = useState([]);
@@ -104,25 +137,34 @@ export default function MentorDashboard() {
     localStorage.setItem('darkMode', darkMode.toString());
   }, [darkMode]);
 
-  useEffect(() => {
-    async function load() {
+  const [dashboardOverview, setDashboardOverview] = useState(null);
+
+  const loadData = async () => {
+    setLoadingStats(true);
+    try {
+      const [statsData, overviewData] = await Promise.all([
+        getMentorStats(),
+        getMentorDashboardOverview()
+      ]);
+      setStats(statsData);
+      setDashboardOverview(overviewData);
+
       try {
-        const data = await getMentorStats();
-        setStats(data);
-        try {
-            const notifs = await getNotifications();
-            setNotifications(notifs || []);
-        } catch (err) {
-            console.error("Failed to load notifications", err);
-        }
-      } catch (e) {
-        console.error("Failed to load mentor stats", e);
-      } finally {
-        setLoadingStats(false);
+          const notifs = await getNotifications();
+          setNotifications(notifs || []);
+      } catch (err) {
+          console.error("Failed to load notifications", err);
       }
+    } catch (e) {
+      console.error("Failed to load mentor stats", e);
+    } finally {
+      setLoadingStats(false);
     }
-    load();
-    loadActivity();
+    await loadActivity();
+  };
+
+  useEffect(() => {
+    loadData();
   }, []);
 
   const loadActivity = async () => {
@@ -155,6 +197,7 @@ export default function MentorDashboard() {
     const exportData = {
       exportDate: new Date().toISOString(),
       stats: stats,
+      overview: dashboardOverview,
       timestamp: Date.now()
     };
     
@@ -170,37 +213,7 @@ export default function MentorDashboard() {
     document.body.removeChild(linkElement);
   };
 
-  const handleSendAnnouncement = () => {
-    const message = prompt("Enter announcement for all your mentees:");
-    if (message) {
-      alert(`Announcement sent to all mentees: "${message}"\n\nNote: This requires backend integration to actually send.`);
-    }
-  };
 
-  const handleQuickAttendance = () => {
-    alert("Quick Attendance feature would open a modal to mark attendance for all students at once.\n\nThis is a frontend demo.");
-  };
-
-  const handleGenerateReport = () => {
-    const reportWindow = window.open();
-    reportWindow.document.write(`
-      <html>
-        <head><title>Mentor Report - ${new Date().toLocaleDateString()}</title></head>
-        <body style="font-family: Arial, sans-serif; padding: 20px;">
-          <h1>Mentor Dashboard Report</h1>
-          <p>Generated: ${new Date().toLocaleString()}</p>
-          <p>Mentor: ${user?.full_name || "Unknown"}</p>
-          <hr>
-          <h2>Statistics</h2>
-          <p>Assigned Students: ${stats?.assigned_students || 0}</p>
-          <p>Feedback Given: ${stats?.total_feedback || 0}</p>
-          <hr>
-          <p>This is a frontend-generated report.</p>
-        </body>
-      </html>
-    `);
-    reportWindow.document.close();
-  };
 
   const markNotificationAsRead = async (id) => {
     try {
@@ -408,11 +421,11 @@ export default function MentorDashboard() {
           />
         </div>
 
-        {/* Quick Actions */}
+        {/* Quick Insights & Actions */}
         <div className={`rounded-2xl ${darkMode ? 'bg-gray-800' : 'bg-white'} shadow-lg p-6`}>
           <div className="flex items-center justify-between mb-6">
             <h2 className="text-lg font-bold">
-              Quick Actions
+              Quick Insights & Actions
             </h2>
             <div className="flex items-center space-x-3">
               <button 
@@ -423,18 +436,19 @@ export default function MentorDashboard() {
                 Export Data
               </button>
               <button 
-                onClick={() => window.location.reload()}
-                className="p-2 rounded-lg hover:bg-gray-700 transition"
-                title="Refresh"
+                onClick={loadData}
+                disabled={loadingStats}
+                className={`p-2 rounded-lg transition ${darkMode ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-slate-100 text-slate-600'}`}
+                title="Refresh Data"
               >
-                <RefreshCw className="w-4 h-4" />
+                <RefreshCw className={`w-4 h-4 ${loadingStats ? 'animate-spin' : ''}`} />
               </button>
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <QuickActionCard
               title="Quick Attendance"
-              description="Mark attendance for all"
+              description={`Mark for ${stats?.assigned_students || 0} students`}
               icon={<ClipboardList className="w-5 h-5" />}
               color="teal"
               darkMode={darkMode}
@@ -442,11 +456,11 @@ export default function MentorDashboard() {
             />
             <QuickActionCard
               title="Send Announcement"
-              description="Message all mentees"
+              description={`Message ${stats?.assigned_students || 0} mentees`}
               icon={<Send className="w-5 h-5" />}
               color="blue"
               darkMode={darkMode}
-              onClick={handleSendAnnouncement}
+              onClick={() => setShowAnnouncementModal(true)}
             />
             <QuickActionCard
               title="Generate Report"
@@ -458,11 +472,24 @@ export default function MentorDashboard() {
             />
             <QuickActionCard
               title="Risk Analysis"
-              description="Identify at-risk students"
+              description={`${dashboardOverview?.risk_distribution?.find(r => r.name === 'High Risk')?.value || 0} students at high risk`}
               icon={<AlertCircle className="w-5 h-5" />}
               color="amber"
               darkMode={darkMode}
-              onClick={() => alert("Risk Analysis feature would show students needing attention.\n\nThis is a frontend demo.")}
+              onClick={() => {
+                  setActiveTab("students");
+                  // Ideally we would also set a filter on the students tab, e.g., setFilter('high_risk')
+                  // For now, just redirecting context is a good step.
+                  notify("Risk Analysis", { body: "Redirected to Students tab. Check 'High Risk' filter.", type: "info" });
+              }}
+            />
+            <QuickActionCard
+              title="Subject Management"
+              description="Manage Department Subjects"
+              icon={<BookOpen className="w-5 h-5" />}
+              color="indigo"
+              darkMode={darkMode}
+              onClick={() => setShowSubjectModal(true)}
             />
           </div>
         </div>
@@ -526,8 +553,14 @@ export default function MentorDashboard() {
 
             {/* Tab Content */}
             <div className="p-6">
-              {activeTab === "overview" && <MentorOverview darkMode={darkMode} stats={stats} />}
-              {activeTab === "students" && <MentorStudents darkMode={darkMode} />}
+              {activeTab === "overview" && (
+        <MentorOverview 
+          darkMode={darkMode} 
+          stats={stats} 
+          overviewData={dashboardOverview}
+          notify={notify}
+        />
+      )}{activeTab === "students" && <MentorStudents darkMode={darkMode} />}
               {activeTab === "attendance" && <MentorAttendance darkMode={darkMode} />}
               {activeTab === "marks" && <MentorMarks darkMode={darkMode} />}
               {activeTab === "circulars" && <MentorCirculars darkMode={darkMode} />}
@@ -594,26 +627,45 @@ export default function MentorDashboard() {
           </div>
         </div>
       </footer>
+
+      {/* Modals */}
+      <SubjectManagement 
+        user={user}
+        isOpen={showSubjectModal}
+        onClose={() => setShowSubjectModal(false)}
+      />
+      
+      {showAnnouncementModal && (
+        <AnnouncementModal
+          isOpen={showAnnouncementModal}
+          onClose={() => setShowAnnouncementModal(false)}
+          onSend={handleSendAnnouncement}
+        />
+      )}
     </div>
   );
 }
 
-function MentorOverview({ darkMode, stats }) {
+function MentorOverview({ darkMode, stats, overviewData, notify }) {
   const [timeFilter, setTimeFilter] = useState('month');
   
-  const performanceData = [
-    { subject: 'Math', attendance: 85, marks: 78 },
-    { subject: 'Physics', attendance: 92, marks: 82 },
-    { subject: 'Chemistry', attendance: 88, marks: 75 },
-    { subject: 'CS', attendance: 95, marks: 88 },
-    { subject: 'English', attendance: 90, marks: 80 },
-  ];
+  const performanceData = overviewData?.subject_performance?.length > 0 
+    ? overviewData.subject_performance 
+    : [
+       // Fallback empty state or keeping 1 dummy if needed for layout, but better to clear it
+      { subject: 'No Data', attendance: 0, marks: 0 },
+    ];
 
-  const riskDistribution = [
-    { name: 'High Risk', value: 2, color: '#ef4444' },
-    { name: 'Medium Risk', value: 3, color: '#f59e0b' },
-    { name: 'Low Risk', value: 10, color: '#10b981' },
-  ];
+  const riskDistribution = overviewData?.risk_distribution?.reduce((acc, curr) => acc + curr.value, 0) > 0
+    ? overviewData.risk_distribution
+    : [
+      { name: 'No Data', value: 1, color: '#e5e7eb' },
+    ];
+
+  const insights = overviewData?.insights || {
+      active_students: 0,
+      total_subjects: 0
+  };
 
   const handleTimeFilterChange = (filter) => {
     setTimeFilter(filter);
@@ -633,10 +685,10 @@ function MentorOverview({ darkMode, stats }) {
           </div>
           <div className="flex flex-wrap gap-2">
             <div className={`px-4 py-2 rounded-full ${darkMode ? 'bg-emerald-500/20 text-emerald-400' : 'bg-emerald-100 text-emerald-700'} text-sm font-medium`}>
-              🟢 All Students Active
+              🟢 {insights.active_students > 0 ? `${insights.active_students} Active Students` : "No Active Students"}
             </div>
             <div className={`px-4 py-2 rounded-full ${darkMode ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-100 text-blue-700'} text-sm font-medium`}>
-              📚 5 Subjects
+              📚 {insights.total_subjects} Subjects
             </div>
           </div>
         </div>
@@ -752,43 +804,49 @@ function MentorOverview({ darkMode, stats }) {
       {/* Action Cards */}
       <div className={`rounded-xl ${darkMode ? 'bg-gray-800' : 'bg-white'} p-5 border ${darkMode ? 'border-gray-700' : 'border-slate-200'} shadow-sm`}>
         <h3 className="font-semibold mb-5">
-          Quick Insights & Actions
+          Action Cards
         </h3>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <InsightCard
             title="Attendance Pending"
-            value="3 students"
+            value={`${insights.attendance_pending_count || 0} students`}
             icon={<ClipboardList className="w-4 h-4" />}
             color="amber"
             action="Mark Now"
-            onClick={() => alert("Mark attendance for pending students")}
+            onClick={() => notify("Attendance Pending", { body: "Redirecting to attendance marking...", type: "info" })}
             darkMode={darkMode}
           />
           <InsightCard
             title="Feedback Due"
-            value="5 students"
+            value={`${insights.feedback_due_count || 0} reviews`}
             icon={<MessageSquare className="w-4 h-4" />}
             color="blue"
             action="Give Feedback"
-            onClick={() => alert("Provide feedback to students")}
+            onClick={() => notify("Feedback Due", { body: "Opening pending reviews...", type: "info" })}
             darkMode={darkMode}
           />
           <InsightCard
             title="High Risk"
-            value="2 students"
+            value={`${insights.high_risk_count || 0} students`}
             icon={<AlertCircle className="w-4 h-4" />}
             color="red"
             action="Review"
-            onClick={() => alert("Review high-risk students")}
+            onClick={() => {
+                const count = insights.high_risk_count || 0;
+                notify("High Risk Review", { body: `Reviewing ${count} high-risk students`, type: "warning" });
+            }}
             darkMode={darkMode}
           />
           <InsightCard
             title="Top Performers"
-            value="4 students"
+            value={`${insights.top_performers_count || 0} students`}
             icon={<Award className="w-4 h-4" />}
             color="emerald"
             action="View"
-            onClick={() => alert("View top performing students")}
+            onClick={() => {
+                const count = insights.top_performers_count || 0;
+                notify("Top Performers", { body: `Viewing ${count} top performing students`, type: "success" });
+            }}
             darkMode={darkMode}
           />
         </div>

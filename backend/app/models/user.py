@@ -18,6 +18,7 @@ class UserCreate(UserBase):
     branch: Optional[str] = None  # NEW
     department: Optional[str] = None
     semester: Optional[int] = None
+    year: Optional[int] = None  # NEW
     usn: Optional[str] = None
 
 class User(UserBase):
@@ -30,6 +31,7 @@ class User(UserBase):
     branch: Optional[str] = None # NEW
     department: Optional[str] = None
     semester: Optional[int] = None
+    year: Optional[int] = None  # NEW
     usn: Optional[str] = None  # For students
     employee_id: Optional[str] = None  # For mentors
     settings: Dict[str, Any] = Field(default_factory=dict)

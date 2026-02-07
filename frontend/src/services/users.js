@@ -29,6 +29,7 @@ export async function createUser(form) {
     password,
     department,
     semester,
+    year,
     usn,
     employee_id,
     phone,
@@ -49,6 +50,9 @@ export async function createUser(form) {
   if (department) extra.department = department;
   if (semester !== "" && semester !== null && semester !== undefined) {
     extra.semester = Number(semester);
+  }
+  if (year !== "" && year !== null && year !== undefined) {
+    extra.year = Number(year);
   }
   if (usn) extra.usn = usn;
   if (employee_id) extra.employee_id = employee_id;

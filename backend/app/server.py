@@ -39,6 +39,7 @@ from app.api.activity import router as activity_router
 from app.api.master import router as master_router
 from app.api.assignments import router as assignments_router
 from app.api.notifications import router as notifications_router
+from app.api.subjects import router as subjects_router
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -65,6 +66,7 @@ app.include_router(activity_router)
 app.include_router(master_router)
 app.include_router(assignments_router)
 app.include_router(notifications_router)
+app.include_router(subjects_router)
 socket_app = socketio.ASGIApp(sio, app)
 
 app.add_middleware(

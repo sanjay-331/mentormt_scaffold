@@ -21,3 +21,8 @@ export async function getStudentPerformance() {
   const res = await api.get("/api/stats/student/performance");
   return res.data;
 }
+
+export async function getMentorDashboardOverview() {
+  const res = await api.get("/api/stats/mentor/dashboard-overview");
+  return res.data;
+}

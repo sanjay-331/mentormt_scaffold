@@ -8,6 +8,11 @@ export async function saveAssignment(mentorId, studentIds) {
   return res.data;
 }
 
+export async function getAssignmentMapping() {
+  const res = await api.get("/api/assignments/mapping");
+  return res.data;
+}
+
 export async function getMentorStudents(mentorId) {
   const res = await api.get(`/api/assignments/mentor/${mentorId}`);
   return res.data;

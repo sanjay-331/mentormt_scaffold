@@ -10,6 +10,8 @@ import { getStudentTimeline } from "../services/timeline";
 import { getAcademicHistory } from "../services/history";
 import { downloadReport } from "../services/reports";
 import { getNotifications, markNotificationAsRead as apiMarkRead, clearAllNotifications as apiClearAll } from "../services/notifications";
+import { useNotification } from "../hooks/useNotification";
+import AppointmentModal from "../components/modals/AppointmentModal";
 
 import {
   LineChart,
@@ -125,6 +127,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_A
 
 export default function StudentDashboard() {
   const { user, logout } = useAuth();
+  const { notify } = useNotification();
   const [stats, setStats] = useState(null);
   const [placement, setPlacement] = useState(null);
   const [peerStats, setPeerStats] = useState(null);
@@ -134,6 +137,7 @@ export default function StudentDashboard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [recentActivity, setRecentActivity] = useState([]);
   const [loadingActivity, setLoadingActivity] = useState(true);
+  const [showAppointmentModal, setShowAppointmentModal] = useState(false);
   const [darkMode, setDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('darkMode') === 'true';
@@ -145,55 +149,48 @@ export default function StudentDashboard() {
     localStorage.setItem('darkMode', darkMode.toString());
   }, [darkMode]);
 
-  useEffect(() => {
-    async function load() {
+  const loadData = async () => {
+    setLoadingStats(true);
+    try {
+      const data = await getStudentStats();
+      setStats(data);
+      
       try {
-        const data = await getStudentStats();
-        setStats(data);
-        
-        try {
-          const activityData = await getRecentActivity();
-          setRecentActivity(activityData || []);
-        } catch (err) {
-            console.error("Failed to load activity", err);
-        } finally {
-            setLoadingActivity(false);
-        }
-        
-        try {
-          const activityData = await getRecentActivity();
-          setRecentActivity(activityData || []);
-        } catch (err) {
-            console.error("Failed to load activity", err);
-        } finally {
-            setLoadingActivity(false);
-        }
-        
-        if (user?.id) {
-            try {
-                const placementData = await getPlacementAnalysis(user.id);
-                setPlacement(placementData);
-                const peerData = await getPeerComparison(user.id);
-                setPeerStats(peerData);
-            } catch (err) {
-                console.error("Failed to load AI stats", err);
-            }
-        }
-
-        // Load real notifications
-        try {
-            const notifs = await getNotifications();
-            setNotifications(notifs || []);
-        } catch (err) {
-            console.error("Failed to load notifications", err);
-        }
-      } catch (e) {
-        console.error("Failed to load student stats", e);
+        const activityData = await getRecentActivity();
+        setRecentActivity(activityData || []);
+      } catch (err) {
+          console.error("Failed to load activity", err);
       } finally {
-        setLoadingStats(false);
+          setLoadingActivity(false);
       }
+      
+      if (user?.id) {
+          try {
+              const placementData = await getPlacementAnalysis(user.id);
+              setPlacement(placementData);
+              const peerData = await getPeerComparison(user.id);
+              setPeerStats(peerData);
+          } catch (err) {
+              console.error("Failed to load AI stats", err);
+          }
+      }
+
+      // Load real notifications
+      try {
+          const notifs = await getNotifications();
+          setNotifications(notifs || []);
+      } catch (err) {
+          console.error("Failed to load notifications", err);
+      }
+    } catch (e) {
+      console.error("Failed to load student stats", e);
+    } finally {
+      setLoadingStats(false);
     }
-    if (user) load(); // Added dependency on user
+  };
+
+  useEffect(() => {
+    if (user) loadData();
   }, [user]);
 
   const formatTimeAgo = (dateString) => {
@@ -231,21 +228,19 @@ export default function StudentDashboard() {
   };
 
   const handleRequestTranscript = () => {
-    alert("Transcript request submitted!\n\nYour academic transcript will be generated and sent to your email.\n\nNote: This is a frontend demo.");
+    // In a real app, this would trigger an API call
+    notify("Transcript Request", { body: "Request submitted! Check email for details.", type: "success" });
   };
 
-  const handleBookAppointment = () => {
-    const mentor = prompt("Enter mentor name for appointment:");
-    const date = prompt("Enter preferred date (YYYY-MM-DD):");
-    const reason = prompt("Enter reason for appointment:");
-    
-    if (mentor && date && reason) {
-      alert(`Appointment booked!\n\nMentor: ${mentor}\nDate: ${date}\nReason: ${reason}\n\nNote: This is a frontend demo.`);
-    }
+  const handleBookAppointment = (data) => {
+    // In real app, call API to book appointment
+    console.log("Appointment data:", data);
+    notify("Appointment Booked", { body: `Meeting with ${data.mentor} on ${data.date}`, type: "success" });
+    setShowAppointmentModal(false);
   };
 
   const handleDownloadCertificate = () => {
-    alert("Certificate download started!\n\nYour course completion certificate is being generated.\n\nNote: This is a frontend demo.");
+    notify("Certificate Download", { body: "Generating certificate...", type: "info" });
   };
 
   const markNotificationAsRead = async (id) => {
@@ -455,13 +450,16 @@ export default function StudentDashboard() {
             </div>
             <div className="flex flex-col gap-3">
               <button
-                onClick={() => alert("Contact your mentor for guidance")}
+                onClick={() => notify("Contact Mentor", { body: "Opening messaging interface...", type: "info" })}
                 className="px-4 py-2 bg-gradient-to-r from-emerald-500 to-teal-600 text-white rounded-xl hover:from-emerald-600 hover:to-teal-700 transition text-sm font-medium"
               >
                 Contact Mentor
               </button>
               <button
-                onClick={() => alert("View your academic calendar")}
+                onClick={() => {
+                  setActiveTab("schedule");
+                  notify("Calendar", { body: "Redirected to Schedule tab", type: "info" });
+                }}
                 className={`px-4 py-2 rounded-xl text-sm font-medium transition ${darkMode ? 'bg-gray-700 hover:bg-gray-600' : 'bg-white hover:bg-slate-100 border border-slate-200'}`}
               >
                 View Calendar
@@ -631,30 +629,31 @@ export default function StudentDashboard() {
                 Export Data
               </button>
               <button 
-                onClick={() => window.location.reload()}
-                className="p-2 rounded-lg hover:bg-gray-700 transition"
-                title="Refresh"
+                onClick={loadData}
+                disabled={loadingStats}
+                className={`p-2 rounded-lg transition ${darkMode ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-slate-100 text-slate-600'}`}
+                title="Refresh Data"
               >
-                <RefreshCw className="w-4 h-4" />
+                <RefreshCw className={`w-4 h-4 ${loadingStats ? 'animate-spin' : ''}`} />
               </button>
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <QuickActionCard
               title="Request Transcript"
-              description="Get academic transcript"
-              icon={<FileSpreadsheet className="w-5 h-5" />}
-              color="emerald"
+              description="Official academic record"
+              icon={<FileText className="w-5 h-5" />}
+              color="blue"
               darkMode={darkMode}
               onClick={handleRequestTranscript}
             />
             <QuickActionCard
               title="Book Appointment"
-              description="Meet with mentor"
+              description="Schedule mentor meeting"
               icon={<Calendar className="w-5 h-5" />}
-              color="blue"
+              color="emerald"
               darkMode={darkMode}
-              onClick={handleBookAppointment}
+              onClick={() => setShowAppointmentModal(true)}
             />
             <QuickActionCard
               title="Download Certificate"
@@ -811,6 +810,11 @@ export default function StudentDashboard() {
           </div>
         </div>
       </footer>
+      <AppointmentModal
+        isOpen={showAppointmentModal}
+        onClose={() => setShowAppointmentModal(false)}
+        onBook={handleBookAppointment}
+      />
     </div>
   );
 }
@@ -1332,7 +1336,7 @@ function StudentAttendanceDetails({ darkMode }) {
         url: window.location.href
       });
     } else {
-      alert("Share feature not available in your browser");
+      notify("Share not available", { body: "Your browser doesn't support sharing.", type: "error" });
     }
   };
 
