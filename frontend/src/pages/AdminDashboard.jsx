@@ -678,6 +678,22 @@ export default function AdminDashboard() {
           </div>
         </div>
       </footer>
+      
+      {/* Modals */}
+      <BroadcastModal
+        isOpen={showBroadcastModal}
+        onClose={() => setShowBroadcastModal(false)}
+        onSend={handleSendBroadcast}
+      />
+      <ImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        onImport={handleBulkImport}
+      />
+      <SystemStatusModal
+        isOpen={showSystemModal}
+        onClose={() => setShowSystemModal(false)}
+      />
     </div>
   );
 }
@@ -2805,20 +2821,6 @@ function AdminCirculars({ darkMode, refreshTrigger }) {
           </div>
         )}
       </div>
-      <BroadcastModal
-        isOpen={showBroadcastModal}
-        onClose={() => setShowBroadcastModal(false)}
-        onSend={handleSendBroadcast}
-      />
-      <ImportModal
-        isOpen={showImportModal}
-        onClose={() => setShowImportModal(false)}
-        onImport={handleBulkImport}
-      />
-      <SystemStatusModal
-        isOpen={showSystemModal}
-        onClose={() => setShowSystemModal(false)}
-      />
     </div>
   );
 }
