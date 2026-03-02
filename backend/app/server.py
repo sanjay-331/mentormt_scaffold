@@ -40,6 +40,7 @@ from app.api.master import router as master_router
 from app.api.assignments import router as assignments_router
 from app.api.notifications import router as notifications_router
 from app.api.subjects import router as subjects_router
+from app.core.config import settings
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -216,7 +217,7 @@ async def forgot_password(request: ForgotPasswordRequest):
     print(f"============================================")
     print(f" PASSWORD RESET REQUEST FOR: {request.email}")
     print(f" TOKEN: {reset_token}")
-    print(f" LINK: http://localhost:5173/reset-password?token={reset_token}")
+    print(f" LINK: {settings.FRONTEND_URL}/reset-password?token={reset_token}")
     print(f"============================================")
 
     return {"message": "If the email is registered, a password reset link has been sent."}

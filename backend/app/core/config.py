@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "change_me"
     JWT_SECRET_KEY: str = "change_me"
     CORS_ORIGINS: Union[List[str], str] = ["*"]
+    FRONTEND_URL: str = "http://localhost:5173"
 
     # Add Mongo settings so they are parsed from .env
     MONGO_URL: str | None = Field(None, env="MONGO_URL")
