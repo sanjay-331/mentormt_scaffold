@@ -5,6 +5,7 @@ import uuid
 
 from app.db import db
 from app.core.auth import get_current_user
+from app.core.audit import log_action
 from app.models.subjects import Subject
 from app.schemas.subjects import SubjectCreate, SubjectUpdate, SubjectResponse
 
@@ -65,6 +66,8 @@ async def create_subject(
     
     await db.subjects.insert_one(subject_data)
     
+    await log_action(current_user["id"], "CREATE", "subject", {"code": payload.code})
+    
     return subject_data
 
 @router.put("/{subject_id}", response_model=SubjectResponse)
@@ -100,6 +103,8 @@ async def update_subject(
         {"$set": update_data}
     )
     
+    await log_action(current_user["id"], "UPDATE", "subject", {"subject_id": subject_id})
+    
     updated_subject = await db.subjects.find_one({"id": subject_id})
     updated_subject["id"] = updated_subject.get("id") or str(updated_subject["_id"])
     
@@ -119,5 +124,7 @@ async def delete_subject(
     result = await db.subjects.delete_one({"id": subject_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Subject not found")
+        
+    await log_action(current_user["id"], "DELETE", "subject", {"subject_id": subject_id})
         
     return {"message": "Subject deleted successfully"}

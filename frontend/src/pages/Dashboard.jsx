@@ -11,15 +11,17 @@ export default function Dashboard() {
 
   if (!user) return null;
 
-  if (user.role === "admin") {
+  const role = user.role?.toLowerCase();
+
+  if (role === "admin") {
     return <AdminDashboard />;
   }
 
-  if (user.role === "mentor") {
+  if (role === "mentor") {
     return <MentorDashboard />;
   }
 
-  if (user.role === "student") {
+  if (role === "student") {
     return <StudentDashboard />;
   }
 

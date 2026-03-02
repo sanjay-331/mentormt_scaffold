@@ -1,0 +1,7 @@
+User: Sasi | Email: sasi@example.com | Role: admin | ID: f5f3581b-cd55-4527-91ed-72a845d17bb7
+User: Sanjay | Email: testtwo@example.com | Role: mentor | ID: 71870a41-cb75-427e-896c-d7b9488112c4
+User: Naveen Kumar | Email: admin@demo.com | Role: admin | ID: a1dc0886-ec97-4862-96c1-f114d3970263
+User: Sanjay | Email: student@demo.com | Role: student | ID: d61a0036-4d8a-4266-b7b6-2ac874d796f8
+User: Sasi | Email: mentorr@demo.com | Role: mentor | ID: cf929cbc-1615-45f1-9ebf-83a5a5c99a30
+User: Kowsikan K | Email: student2@demo.com | Role: student | ID: 773040e7-c935-48ab-9a6a-b4f208305e5a
+User: Test Admin | Email: testadmin_unique@example.com | Role: admin | ID: a62083d2-4137-44d3-b4f5-3fd70e8c5f6e

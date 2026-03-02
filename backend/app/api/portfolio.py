@@ -11,6 +11,7 @@ from app.models.portfolio import (
     PlacementPrediction, PeerComparisonStats
 )
 from app.core.employability import calculate_student_analysis, calculate_peer_stats
+from app.core.audit import log_action
 from pydantic import BaseModel
 from datetime import datetime, timezone
 
@@ -34,6 +35,8 @@ async def add_certification(
     cert_data["created_at"] = cert_data["created_at"].isoformat()
     
     await db.certifications.insert_one(cert_data)
+    
+    await log_action(current_user["id"], "CREATE", "certification", {"cert_name": cert.certificate_name})
     
     # Cleanup for response
     if "_id" in cert_data: del cert_data["_id"]
@@ -67,6 +70,8 @@ async def verify_certification(
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Certification not found")
         
+    await log_action(current_user["id"], "VERIFY", "certification", {"cert_id": cert_id})
+        
     return {"message": "Certification verified"}
 
 # --- Projects ---
@@ -87,6 +92,9 @@ async def add_project(
     proj_data["created_at"] = proj_data["created_at"].isoformat()
     
     await db.projects.insert_one(proj_data)
+    
+    await log_action(current_user["id"], "CREATE", "project", {"title": project.title})
+    
     if "_id" in proj_data: del proj_data["_id"]
     return proj_data
 
@@ -125,6 +133,8 @@ async def project_feedback(
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Project not found")
         
+    await log_action(current_user["id"], "SCORE", "project", {"project_id": project_id, "score": feedback.score})
+        
     return {"message": "Feedback submitted"}
 
 @router.post("/letters", response_model=StudentLetter)
@@ -145,6 +155,9 @@ async def submit_letter(
     letter_data["submitted_date"] = letter_data["submitted_date"].isoformat()
     
     await db.letters.insert_one(letter_data)
+    
+    await log_action(current_user["id"], "CREATE", "letter", {"type": letter.letter_type})
+    
     if "_id" in letter_data: del letter_data["_id"]
     return letter_data
 
@@ -185,6 +198,8 @@ async def reply_letter(
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Letter not found")
         
+    await log_action(current_user["id"], "REPLY", "letter", {"letter_id": letter_id, "status": reply.status})
+        
     return {"message": "Reply submitted"}
 
 # --- Sports ---
@@ -205,6 +220,9 @@ async def add_sports(
     sport_data["created_at"] = sport_data["created_at"].isoformat()
     
     await db.sports.insert_one(sport_data)
+    
+    await log_action(current_user["id"], "CREATE", "sports", {"sport": sport.sport_name})
+    
     if "_id" in sport_data: del sport_data["_id"]
     return sport_data
 
@@ -237,6 +255,9 @@ async def add_cultural(
     act_data["created_at"] = act_data["created_at"].isoformat()
     
     await db.cultural.insert_one(act_data)
+    
+    await log_action(current_user["id"], "CREATE", "cultural", {"activity": activity.activity_name})
+    
     if "_id" in act_data: del act_data["_id"]
     return act_data
 

@@ -1,114 +1,100 @@
-﻿from fastapi import APIRouter, HTTPException, Depends, status, Header, Body
-from typing import Optional
+﻿from fastapi import APIRouter, Depends, HTTPException, status, Body
 from datetime import timedelta
-from app.db import get_db
-from app.models.user import UserCreate, UserOut
-from app.core.security import get_password_hash, verify_password, create_access_token, decode_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
-from bson import ObjectId
-import traceback
+from typing import Optional
+from app.db import db
+from app.core.auth import (
+    create_access_token, 
+    get_current_user,
+    get_password_hash,
+    verify_password
+)
+from app.models.user import UserCreate, User
+from app.core.audit import log_action
 
-router = APIRouter()
+router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
-@router.post('/register', response_model=UserOut, status_code=status.HTTP_201_CREATED)
-async def register(user: UserCreate):
-    db = get_db()
-    existing = await db['users'].find_one({'email': user.email})
-    if existing:
-        raise HTTPException(status_code=400, detail='Email already registered')
-    doc = user.dict()
-    doc['hashed_password'] = get_password_hash(doc.pop('password'))
-    res = await db['users'].insert_one(doc)
-    created = await db['users'].find_one({'_id': res.inserted_id})
-    created['_id'] = str(created['_id'])
-    if 'hashed_password' in created:
-        del created['hashed_password']
-    return created
+@router.post("/register")
+async def register(payload: UserCreate):
+    """Registers a new user."""
+    existing_user = await db.users.find_one({"email": payload.email})
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
 
-@router.post('/login')
-async def login(payload: dict = Body(...)):
+    # Hash the password
+    user_data = payload.model_dump()
+    user_data["password_hash"] = get_password_hash(user_data.pop("password"))
+    
+    # Create the User object to generate UUID and timestamp
+    new_user = User(**user_data)
+    user_dict = new_user.model_dump()
+    user_dict["created_at"] = user_dict["created_at"].isoformat()
+
+    await db.users.insert_one(user_dict)
+    
+    # Remove password hash before returning
+    user_dict.pop("password_hash", None)
+    
+    await log_action(user_dict["id"], "REGISTER", "user", {"email": payload.email})
+    
+    return user_dict
+
+@router.post("/login")
+async def login(
+    email: Optional[str] = None,
+    password: Optional[str] = None,
+    payload: dict = Body(None)
+):
     """
-    Accepts JSON body: { "email": "you@x.com", "password": "secret" }
-    This version prefers documents that already have 'hashed_password' and
-    falls back to legacy fields like 'password' or 'password_hash'.
+    Logs in a user and returns a JWT token.
+    Supports email/password from either query parameters or JSON body.
     """
-    email = payload.get('email')
-    password = payload.get('password')
+    # 1. Try to get credentials from payload (JSON body)
+    if payload:
+        email = email or payload.get("email")
+        password = password or payload.get("password")
+    
     if not email or not password:
-        raise HTTPException(status_code=400, detail='Missing email or password')
+        raise HTTPException(status_code=400, detail="Missing email or password")
 
-    db = get_db()
-
-    # Prefer a user document that already contains a modern 'hashed_password' field
-    user = await db['users'].find_one({'email': email, 'hashed_password': {'': True}})
+    user = await db.users.find_one({"email": email})
     if not user:
-        # fallback to any user with that email (legacy documents)
-        user = await db['users'].find_one({'email': email})
+        raise HTTPException(status_code=401, detail="Incorrect email or password")
 
-    if not user:
-        print(f'[AUTH DEBUG] login attempt for email={email} -> user NOT FOUND')
-        raise HTTPException(status_code=400, detail='Incorrect email or password')
+    # Check for both password_hash and legacy fields
+    password_hash = user.get("password_hash") or user.get("password")
+    
+    if not password_hash or not verify_password(password, password_hash):
+        raise HTTPException(status_code=401, detail="Incorrect email or password")
 
-    stored_keys = list(user.keys())
-    # support multiple legacy field names
-    stored = user.get('hashed_password') or user.get('password') or user.get('password_hash')
-    print(f'[AUTH DEBUG] login attempt for email={email} -> user found, keys={stored_keys}')
-    # indicate which field we're using
-    if 'hashed_password' in user:
-        used = 'hashed_password'
-    elif 'password' in user:
-        used = 'password'
-    elif 'password_hash' in user:
-        used = 'password_hash'
-    else:
-        used = 'none'
-    print(f'[AUTH DEBUG] using stored field type: {used}')
+    # Create access token
+    access_token = create_access_token(data={"sub": user["id"]})
+    
+    await log_action(user["id"], "LOGIN", "session")
+    
+    # Prepare non-sensitive user data for frontend
+    user_info = {
+        "id": user["id"],
+        "email": user["email"],
+        "full_name": user["full_name"],
+        "role": user["role"],
+        "college": user.get("college"),
+        "branch": user.get("branch"),
+        "department": user.get("department"),
+        "semester": user.get("semester"),
+        "year": user.get("year"),
+        "usn": user.get("usn"),
+        "employee_id": user.get("employee_id"),
+        "settings": user.get("settings", {})
+    }
 
-    if not stored:
-        print(f'[AUTH DEBUG] no stored credential for user {email}')
-        raise HTTPException(status_code=400, detail='Incorrect email or password')
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": user_info
+    }
 
-    # verify password (compatible with passlib context)
-    try:
-        ok = verify_password(password, stored)
-    except Exception as e:
-        ok = False
-        print(f'[AUTH DEBUG] verify_password raised: {repr(e)}')
-
-    print(f'[AUTH DEBUG] verify result for email={email}: {ok}')
-
-    if not ok:
-        # If verification failed for a legacy 'password_hash' format, we could migrate here
-        # but for safety we simply return a generic error and log.
-        raise HTTPException(status_code=400, detail='Incorrect email or password')
-
-    token = create_access_token(subject=str(user.get('_id')), expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
-    print(f'[AUTH DEBUG] login successful for email={email}, issuing token (len={len(token)})')
-    return {'access_token': token, 'token_type': 'bearer'}
-
-# helper dependency to get current user
-async def get_current_user(authorization: Optional[str] = Header(None)):
-    if not authorization:
-        raise HTTPException(status_code=401, detail='Missing authorization header')
-    scheme, _, token = authorization.partition(' ')
-    if scheme.lower() != 'bearer' or not token:
-        raise HTTPException(status_code=401, detail='Invalid authorization header')
-    payload = decode_access_token(token)
-    if not payload:
-        raise HTTPException(status_code=401, detail='Invalid or expired token')
-    user_id = payload.get('sub')
-    db = get_db()
-    try:
-        oid = ObjectId(user_id)
-    except Exception:
-        raise HTTPException(status_code=401, detail='Invalid token payload')
-    user = await db['users'].find_one({'_id': oid})
-    if not user:
-        raise HTTPException(status_code=401, detail='User not found')
-    user['_id'] = str(user['_id'])
-    if 'hashed_password' in user:
-        del user['hashed_password']
-    return user
-
-@router.get('/me', response_model=UserOut)
-async def me(current_user = Depends(get_current_user)):
+@router.get("/me")
+async def get_me(current_user: dict = Depends(get_current_user)):
+    """Returns the current user profile."""
+    # current_user is already cleaned of sensitive fields in the dependency
     return current_user
