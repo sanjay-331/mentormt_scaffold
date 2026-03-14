@@ -82,3 +82,18 @@ export async function updateUser(userId, updates) {
 export async function deleteUser(userId) {
   await api.delete(`/api/users/${userId}`);
 }
+
+/**
+ * Bulk import users via a CSV or JSON file (admin only).
+ */
+export async function bulkImport(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const res = await api.post("/api/users/bulk", formData, {
+    headers: {
+      "Content-Type": "multipart/form-data",
+    },
+  });
+  return res.data;
+}

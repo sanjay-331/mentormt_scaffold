@@ -24,6 +24,18 @@ const ChatWidget = () => {
   }, [user]);
 
   useEffect(() => {
+    const handleOpenChat = (e) => {
+      setIsOpen(true);
+      // Optional: If target user is passed, we could immediately open their chat
+      if (e.detail && e.detail.user) {
+         openChat(e.detail.user);
+      }
+    };
+    window.addEventListener('open-chat', handleOpenChat);
+    return () => window.removeEventListener('open-chat', handleOpenChat);
+  }, []);
+
+  useEffect(() => {
     const socket = getSocket();
     if (!socket) return;
 

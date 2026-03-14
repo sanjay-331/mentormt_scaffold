@@ -6,7 +6,9 @@ from app.core.auth import get_current_user
 from app.core.reports import (
     generate_attendance_report, 
     generate_marks_report, 
-    generate_mentor_summary_report
+    generate_mentor_summary_report,
+    generate_transcript_report,
+    generate_certificate_report
 )
 
 router = APIRouter(prefix="/api/reports", tags=["Reporting"])
@@ -90,4 +92,49 @@ async def download_mentor_summary(
         io.BytesIO(file_content),
         media_type=media_type,
         headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+@router.get("/transcript")
+async def download_transcript(
+    format: str = "pdf",
+    student_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Download student transcript (marks report alias)."""
+    if current_user["role"] == "student":
+        student_id = current_user["id"]
+         
+    file_content = await generate_transcript_report(format, student_id)
+    
+    if not file_content:
+        raise HTTPException(status_code=404, detail="No transcript data found")
+
+    media_type = "application/pdf" if format == "pdf" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    filename = f"transcript.{format}"
+
+    return StreamingResponse(
+        io.BytesIO(file_content),
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+@router.get("/certificate")
+async def download_certificate(
+    format: str = "pdf",
+    student_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Download student completion certificate."""
+    if current_user["role"] == "student":
+        student_id = current_user["id"]
+         
+    file_content = await generate_certificate_report(format, student_id)
+    
+    if not file_content:
+        raise HTTPException(status_code=404, detail="No certificate data found or bad format")
+
+    return StreamingResponse(
+        io.BytesIO(file_content),
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=certificate.pdf"}
     )

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import Modal from '../Modal';
 import { CheckCircle, AlertCircle, Server, Database, Activity, Clock } from 'lucide-react';
+import api from '../../services/api';
 
 export default function SystemStatusModal({ isOpen, onClose }) {
   const [statuses, setStatuses] = useState([
@@ -11,20 +12,32 @@ export default function SystemStatusModal({ isOpen, onClose }) {
   ]);
 
   useEffect(() => {
+    let isMounted = true;
     if (isOpen) {
-      // Simulate checking statuses
-      const timers = statuses.map((_, index) => 
-        setTimeout(() => {
-          setStatuses(prev => prev.map((s, i) => 
-            i === index ? { ...s, status: 'operational' } : s
-          ));
-        }, (index + 1) * 800)
-      );
-      return () => timers.forEach(clearTimeout);
+      setStatuses(prev => prev.map(s => ({...s, status: 'checking'})));
+      
+      api.get('/api/system/health')
+        .then(res => {
+          if (!isMounted) return;
+          const { services } = res.data;
+          // Update statuses with real state
+          const newStatuses = statuses.map((item, index) => {
+              const realService = services.find(s => s.name === item.name);
+              return { ...item, status: realService ? realService.status : 'operational' };
+          });
+          setStatuses(newStatuses);
+        })
+        .catch(err => {
+          if (!isMounted) return;
+          console.error("Health check failed", err);
+          setStatuses(prev => prev.map(s => ({...s, status: 'degraded'})));
+        });
+        
     } else {
-        // Reset on close
         setStatuses(prev => prev.map(s => ({...s, status: 'checking'})));
     }
+    
+    return () => { isMounted = false; };
   }, [isOpen]);
 
   return (
@@ -59,6 +72,11 @@ export default function SystemStatusModal({ isOpen, onClose }) {
                 {item.status === 'operational' && (
                     <span className="flex items-center text-emerald-500 text-sm font-medium">
                         <CheckCircle className="w-4 h-4 mr-1" /> Operational
+                    </span>
+                )}
+                {item.status === 'degraded' && (
+                    <span className="flex items-center text-red-500 text-sm font-medium">
+                        <AlertCircle className="w-4 h-4 mr-1" /> Failed
                     </span>
                 )}
             </div>

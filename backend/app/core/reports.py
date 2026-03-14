@@ -138,8 +138,36 @@ async def generate_mentor_summary_report(format: str, mentor_id: str) -> bytes:
             ('GRID', (0, 0), (-1, -1), 1, colors.black),
         ]))
         
-        elements.append(table)
         doc.build(elements)
         return buffer.getvalue()
         
     return b""
+
+async def generate_transcript_report(format: str, student_id: str) -> bytes:
+    """Generates a transcript report. For demo, wraps marking system."""
+    return await generate_marks_report(format, student_id)
+
+async def generate_certificate_report(format: str, student_id: str) -> bytes:
+    """Generates a dummy certificate of completion."""
+    if format != "pdf":
+        return b"" # Only PDFs for Certificates
+    
+    student = await db.users.find_one({"id": student_id})
+    name = student.get("full_name", "Student") if student else "Student"
+    
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter)
+    elements = []
+    styles = getSampleStyleSheet()
+    
+    elements.append(Spacer(1, 100))
+    elements.append(Paragraph("CERTIFICATE OF COMPLETION", styles["Title"]))
+    elements.append(Spacer(1, 50))
+    elements.append(Paragraph(f"This is to certify that", styles["Normal"]))
+    elements.append(Spacer(1, 20))
+    elements.append(Paragraph(f"<b>{name}</b>", styles["Heading1"]))
+    elements.append(Spacer(1, 20))
+    elements.append(Paragraph("has successfully completed all requirements under the Mentorship Program.", styles["Normal"]))
+    
+    doc.build(elements)
+    return buffer.getvalue()

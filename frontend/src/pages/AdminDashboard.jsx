@@ -10,6 +10,7 @@ import {
   createUser,
   updateUser,
   deleteUser,
+  bulkImport,
 } from "../services/users";
 import { saveAssignment, getAssignmentMapping } from "../services/assignments";
 import { getCirculars, createCircular } from "../services/circulars";
@@ -224,28 +225,13 @@ export default function AdminDashboard() {
   };
 
   const handleBulkImport = async (file) => {
-    // Simulate parsing the file and creating a dummy user to demonstrate functionality
     console.log("Importing file:", file);
     const toastId = notify("Bulk Import", { body: "Processing import...", type: "info" });
     
     try {
-        // Use timestamp for uniqueness to prevent 400 Bad Request (Duplicate Email/Username)
-        const timestamp = Date.now();
-        const dummyUser = {
-            full_name: `Imported User ${timestamp}`,
-            email: `imported${timestamp}@example.com`,
-            role: "student",
-            password: "password123",
-            department: "Computer Science",
-            semester: 1,
-            year: 1,
-            usn: `IMP${timestamp}`,
-            phone: "9999999999"
-        };
+        const response = await bulkImport(file);
         
-        await createUser(dummyUser);
-        
-        notify("Bulk Import", { body: `Imported ${file.name} successfully!`, type: "success" });
+        notify("Bulk Import", { body: response.message || `Imported ${file.name} successfully!`, type: "success" });
         setRefreshTrigger(prev => prev + 1);
         setShowImportModal(false);
         setActiveTab("users"); // Redirect

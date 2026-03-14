@@ -12,13 +12,15 @@ import {
   createAttendanceRecord,
 } from "../services/attendance";
 import { uploadMarks, createMarksRecord } from "../services/marks";
-import { getCirculars } from "../services/circulars";
+import { getCirculars, createCircular } from "../services/circulars";
 import { getRecentActivity } from "../services/activity";
 import { getSubjects } from "../services/master";
 import { getNotifications, markNotificationAsRead as apiMarkRead, clearAllNotifications as apiClearAll } from "../services/notifications";
 
 import { useNotification } from "../hooks/useNotification";
 import SubjectManagement from "../components/SubjectManagement";
+import { downloadReport } from "../services/reports";
+import PortfolioModal from "../components/modals/PortfolioModal";
 
 import {
   BarChart,
@@ -96,6 +98,7 @@ export default function MentorDashboard() {
  
   const [showAnnouncementModal, setShowAnnouncementModal] = useState(false);
   const [showSubjectModal, setShowSubjectModal] = useState(false);
+  const [filterRiskLevel, setFilterRiskLevel] = useState("all");
 
   // ... (existing useEffect)
 
@@ -104,23 +107,34 @@ export default function MentorDashboard() {
     notify("Attendance", { body: "Redirected to Attendance tab", type: "info" });
   };
 
-  const handleSendAnnouncement = (data) => {
-    // In a real app, this would call an API
-    console.log("Announcement data:", data);
-    notify("Announcement Sent", { body: `Sent "${data.subject}" to ${stats?.assigned_students || 0} mentees`, type: "success" });
-    setShowAnnouncementModal(false);
+  const handleSendAnnouncement = async (data) => {
+    const toastId = notify("Announcement", { body: "Sending announcement...", type: "info" });
+    try {
+        await createCircular({
+            title: data.subject,
+            content: data.message,
+            target_audience: "student", // target your mentees
+            file: null
+        });
+        
+        notify("Announcement Sent", { body: `Sent "${data.subject}" to ${stats?.assigned_students || 0} mentees`, type: "success" });
+        setShowAnnouncementModal(false);
+    } catch (e) {
+        console.error("Failed to send announcement", e);
+        const errorMsg = e.response?.data?.detail || "Could not send announcement. Check console.";
+        notify("Announcement Failed", { body: errorMsg, type: "error" });
+    }
   };
 
-  const handleGenerateReport = () => {
-    // ... (existing logic or enhanced)
-    notify("Report Generation", { body: "Downloading monthly report...", type: "success" });
-    // Simulate download delay
-    setTimeout(() => {
-       const link = document.createElement("a");
-       link.href = "#";
-       link.setAttribute("download", "report.pdf");
-       // link.click(); // Commented out to avoid error in non-browser env
-    }, 1000);
+  const handleGenerateReport = async () => {
+    try {
+      notify("Report Generation", { body: "Downloading monthly report...", type: "info" });
+      await downloadReport('mentor-summary', 'pdf');
+      notify("Success", { body: "Report downloaded successfully.", type: "success" });
+    } catch (e) {
+      console.error(e);
+      notify("Error", { body: "Failed to generate mentor summary.", type: "error" });
+    }
   };
   const [notifications, setNotifications] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -212,8 +226,6 @@ export default function MentorDashboard() {
     linkElement.click();
     document.body.removeChild(linkElement);
   };
-
-
 
   const markNotificationAsRead = async (id) => {
     try {
@@ -477,9 +489,8 @@ export default function MentorDashboard() {
               color="amber"
               darkMode={darkMode}
               onClick={() => {
+                  setFilterRiskLevel("high");
                   setActiveTab("students");
-                  // Ideally we would also set a filter on the students tab, e.g., setFilter('high_risk')
-                  // For now, just redirecting context is a good step.
                   notify("Risk Analysis", { body: "Redirected to Students tab. Check 'High Risk' filter.", type: "info" });
               }}
             />
@@ -560,7 +571,8 @@ export default function MentorDashboard() {
           overviewData={dashboardOverview}
           notify={notify}
         />
-      )}{activeTab === "students" && <MentorStudents darkMode={darkMode} />}
+      )}
+      {activeTab === "students" && <MentorStudents darkMode={darkMode} initialRiskFilter={filterRiskLevel} onRiskFilterChange={setFilterRiskLevel} />}
               {activeTab === "attendance" && <MentorAttendance darkMode={darkMode} />}
               {activeTab === "marks" && <MentorMarks darkMode={darkMode} />}
               {activeTab === "circulars" && <MentorCirculars darkMode={darkMode} />}
@@ -1508,7 +1520,7 @@ function MentorAttendance({ darkMode }) {
     }
   };
 
-  const handleQuickMarkAll = () => {
+  const handleQuickMarkAll = async () => {
     if (students.length === 0) {
       alert("No students available");
       return;
@@ -1524,7 +1536,24 @@ function MentorAttendance({ darkMode }) {
     }
     
     if (confirm(`Mark ${students.length} students as ${status} for ${subject}?`)) {
-      alert(`Marked ${students.length} students as ${status} for ${subject}.\n\nNote: This is a frontend demo - backend integration required for actual saving.`);
+      setManualSaving(true);
+      try {
+        const promises = students.map(s => 
+          createAttendanceRecord({
+            student_id: s.id,
+            subject: subject.trim(),
+            date: manualDate,
+            status: status,
+          })
+        );
+        await Promise.all(promises);
+        notify("Success", { body: `Marked ${students.length} students as ${status}`, type: "success" });
+      } catch (e) {
+        console.error(e);
+        notify("Error", { body: "Failed to mark some records. Check console.", type: "error" });
+      } finally {
+        setManualSaving(false);
+      }
     }
   };
 
@@ -2383,7 +2412,7 @@ function MentorMarks({ darkMode }) {
   );
 }
 
-function MentorStudents({ darkMode }) {
+function MentorStudents({ darkMode, initialRiskFilter = "all", onRiskFilterChange }) {
   const { user } = useAuth();
   const [students, setStudents] = useState([]);
   const [loadingStudents, setLoadingStudents] = useState(true);
@@ -2393,16 +2422,28 @@ function MentorStudents({ darkMode }) {
   const [loadingFeedback, setLoadingFeedback] = useState(false);
   const [newFeedback, setNewFeedback] = useState("");
   const [submittingFeedback, setSubmittingFeedback] = useState(false);
+  const [showPortfolio, setShowPortfolio] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterSemester, setFilterSemester] = useState("all");
+  const [filterRisk, setFilterRisk] = useState(initialRiskFilter);
+
+  useEffect(() => {
+    setFilterRisk(initialRiskFilter);
+  }, [initialRiskFilter]);
+
+  const handleRiskChange = (val) => {
+      setFilterRisk(val);
+      if (onRiskFilterChange) onRiskFilterChange(val);
+  };
 
   useEffect(() => {
     async function load() {
       setLoadingStudents(true);
       setError("");
       try {
-        const data = await getMentorStudents(user.id);
-        setStudents(data.students || []);
+        const perfData = await getMentorMenteesPerformance();
+        const mapped = perfData.map(s => ({ ...s, id: s.student_id }));
+        setStudents(mapped || []);
       } catch (e) {
         console.error("Failed to load mentor students", e);
         setError("Failed to load assigned students.");
@@ -2461,19 +2502,20 @@ function MentorStudents({ darkMode }) {
 
   const handleSendMessage = () => {
     if (!selectedStudent) return;
-    const message = prompt(`Send message to ${selectedStudent.full_name}:`);
-    if (message) {
-      alert(`Message sent to ${selectedStudent.full_name}: "${message}"\n\nNote: This requires backend integration.`);
-    }
+    window.dispatchEvent(new CustomEvent('open-chat', { detail: { studentId: selectedStudent.id } }));
+    notify("Chat", { body: `Opening chat for ${selectedStudent.full_name}`, type: "info" });
   };
 
   const handleViewPerformance = () => {
     if (!selectedStudent) return;
-    alert(`Viewing performance analytics for ${selectedStudent.full_name}\n\nThis would open detailed performance charts.`);
+    setShowPortfolio(true);
   };
 
   const filteredStudents = students.filter(student => {
     if (filterSemester !== "all" && student.semester != filterSemester) {
+      return false;
+    }
+    if (filterRisk !== "all" && student.risk_level !== filterRisk) {
       return false;
     }
     
@@ -2514,6 +2556,16 @@ function MentorStudents({ darkMode }) {
               {[1, 2, 3, 4, 5, 6, 7, 8].map(sem => (
                 <option key={sem} value={sem}>Semester {sem}</option>
               ))}
+            </select>
+            <select
+              value={filterRisk}
+              onChange={(e) => handleRiskChange(e.target.value)}
+              className={`px-3 py-1.5 text-sm rounded-lg border ${darkMode ? 'bg-gray-700 border-gray-600' : 'bg-white border-slate-300'}`}
+            >
+              <option value="all">All Risk Levels</option>
+              <option value="low">Low Risk</option>
+              <option value="medium">Medium Risk</option>
+              <option value="high">High Risk</option>
             </select>
           </div>
         </div>
@@ -2741,6 +2793,14 @@ function MentorStudents({ darkMode }) {
           )}
         </div>
       </div>
+      {showPortfolio && (
+        <PortfolioModal
+          isOpen={showPortfolio}
+          onClose={() => setShowPortfolio(false)}
+          darkMode={darkMode}
+          student={selectedStudent}
+        />
+      )}
     </div>
   );
 }

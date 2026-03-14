@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from app.api.v1 import auth as auth_router
 from app.api.v1 import global_router
-from app.api import academic, comm, user, reporting, stats, portfolio, activity, master, assignments, notifications, subjects
+from app.api import academic, comm, user, reporting, stats, portfolio, activity, master, assignments, notifications, subjects, system, appointments, academic_calendar
 
 router = APIRouter()
 
@@ -13,6 +13,7 @@ router.include_router(academic.router)
 router.include_router(comm.router)
 router.include_router(user.router)
 router.include_router(reporting.router)
+router.include_router(academic_calendar.router)
 
 # Pre-existing Routers (Legacy/Compatibility)
 router.include_router(stats.router)
@@ -25,3 +26,5 @@ router.include_router(subjects.router)
 
 # Global Services (Search, Audit, Recs)
 router.include_router(global_router.router)
+router.include_router(system.router)
+router.include_router(appointments.router)

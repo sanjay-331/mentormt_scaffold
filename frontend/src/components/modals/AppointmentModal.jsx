@@ -1,21 +1,28 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Modal from '../Modal';
+import api from '../../services/api';
 
 export default function AppointmentModal({ isOpen, onClose, onBook, services }) {
   const [mentor, setMentor] = useState('');
   const [date, setDate] = useState('');
   const [reason, setReason] = useState('');
+  const [mentors, setMentors] = useState([]);
 
-  // Mock mentors list or fetch from props/services if available. 
-  // Ideally this component should receive available mentors.
-  // For now we simulate based on "services" prop or default.
+  useEffect(() => {
+    if (isOpen) {
+        api.get('/api/users?role=mentor')
+           .then(res => setMentors(res.data || []))
+           .catch(err => console.error("Failed to fetch mentors", err));
+    } else {
+        setMentor('');
+        setDate('');
+        setReason('');
+    }
+  }, [isOpen]);
 
   const handleSubmit = () => {
     if (mentor && date && reason) {
       onBook({ mentor, date, reason });
-      setMentor('');
-      setDate('');
-      setReason('');
       onClose();
     }
   };
@@ -46,15 +53,18 @@ export default function AppointmentModal({ isOpen, onClose, onBook, services }) 
       <div className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-            Recepient (Mentor)
+            Recipient (Mentor)
           </label>
-          <input
-            type="text"
+          <select
             value={mentor}
             onChange={(e) => setMentor(e.target.value)}
             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none transition"
-            placeholder="Enter mentor's name"
-          />
+          >
+            <option value="">Select a mentor...</option>
+            {mentors.map(m => (
+                <option key={m.id} value={m.id}>{m.full_name}</option>
+            ))}
+          </select>
         </div>
         <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">

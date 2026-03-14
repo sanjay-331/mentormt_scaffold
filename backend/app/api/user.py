@@ -1,8 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from typing import List, Optional, Dict, Any
 from app.db import db
-from app.core.auth import get_current_user
+from app.core.auth import get_current_user, get_password_hash
 from app.core.audit import log_action
+import csv
+import json
+import uuid
+from datetime import datetime
+from io import StringIO
 
 router = APIRouter(prefix="/api/users", tags=["User Management"])
 
@@ -10,6 +15,84 @@ router = APIRouter(prefix="/api/users", tags=["User Management"])
 async def get_my_profile(current_user: dict = Depends(get_current_user)):
     """Returns the profile of the currently authenticated user."""
     return current_user
+
+@router.post("/bulk")
+async def bulk_import_users(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user)
+):
+    """Import multiple users from a CSV or JSON file (Admin only)."""
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    content = await file.read()
+    users_to_insert = []
+    
+    try:
+        if file.filename.endswith('.csv'):
+            decoded = content.decode('utf-8')
+            reader = csv.DictReader(StringIO(decoded))
+            for row in reader:
+                users_to_insert.append(row)
+        elif file.filename.endswith('.json'):
+            users_to_insert = json.loads(content)
+        else:
+            raise HTTPException(status_code=400, detail="Invalid file format. Use CSV or JSON.")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error parsing file: {str(e)}")
+        
+    if not users_to_insert:
+        raise HTTPException(status_code=400, detail="No users found in file")
+        
+    inserted_count = 0
+    errors = []
+    
+    for user_data in users_to_insert:
+        try:
+            # Required fields
+            email = user_data.get("email")
+            full_name = user_data.get("full_name")
+            role = user_data.get("role", "student")
+            password = user_data.get("password", "password123")
+            
+            if not email or not full_name:
+                errors.append(f"Missing email or full_name for row: {user_data}")
+                continue
+                
+            # Check existing
+            existing = await db.users.find_one({"email": email})
+            if existing:
+                errors.append(f"User with email {email} already exists")
+                continue
+                
+            user_id = str(uuid.uuid4())
+            new_user = {
+                "id": user_id,
+                "email": email,
+                "full_name": full_name,
+                "role": role,
+                "password_hash": get_password_hash(password),
+                "created_at": datetime.utcnow().isoformat(),
+                "phone": user_data.get("phone", ""),
+                "department": user_data.get("department", ""),
+                "semester": int(user_data.get("semester", 1)) if user_data.get("semester") else None,
+                "usn": user_data.get("usn", ""),
+                "settings": {}
+            }
+            
+            await db.users.insert_one(new_user)
+            inserted_count += 1
+            
+        except Exception as e:
+            errors.append(f"Error processing {user_data.get('email', 'unknown')}: {str(e)}")
+            
+    await log_action(current_user["id"], "IMPORT", "users", {"inserted": inserted_count, "errors": len(errors)})
+    
+    return {
+        "message": f"Successfully imported {inserted_count} users",
+        "inserted": inserted_count,
+        "errors": errors
+    }
 
 @router.put("/me/settings")
 async def update_my_settings(
@@ -34,8 +117,11 @@ async def list_users(
     role: Optional[str] = None,
     current_user: dict = Depends(get_current_user)
 ):
-    """Retrieves a list of users, filtered by role (Admin/Mentor only)."""
-    if current_user["role"] not in ["admin", "mentor"]:
+    """Retrieves a list of users, filtered by role."""
+    # Admins and mentors can see all. Students can only see mentors.
+    if current_user["role"] == "student" and role != "mentor":
+        raise HTTPException(status_code=403, detail="Students can only fetch mentors")
+    elif current_user["role"] not in ["admin", "mentor", "student"]:
         raise HTTPException(status_code=403, detail="Not authorized")
 
     query = {"role": role} if role else {}

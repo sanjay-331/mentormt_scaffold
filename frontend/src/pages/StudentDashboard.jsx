@@ -11,6 +11,7 @@ import { getAcademicHistory } from "../services/history";
 import { downloadReport } from "../services/reports";
 import { getNotifications, markNotificationAsRead as apiMarkRead, clearAllNotifications as apiClearAll } from "../services/notifications";
 import { useNotification } from "../hooks/useNotification";
+import api from '../services/api';
 import AppointmentModal from "../components/modals/AppointmentModal";
 
 import {
@@ -121,8 +122,7 @@ import {
 } from "lucide-react";
 
 import StudentPortfolio from "./StudentPortfolio";
-
-
+import CalendarModal from "../components/modals/CalendarModal";
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 export default function StudentDashboard() {
@@ -138,6 +138,7 @@ export default function StudentDashboard() {
   const [recentActivity, setRecentActivity] = useState([]);
   const [loadingActivity, setLoadingActivity] = useState(true);
   const [showAppointmentModal, setShowAppointmentModal] = useState(false);
+  const [showCalendar, setShowCalendar] = useState(false);
   const [darkMode, setDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('darkMode') === 'true';
@@ -227,20 +228,43 @@ export default function StudentDashboard() {
     document.body.removeChild(linkElement);
   };
 
-  const handleRequestTranscript = () => {
-    // In a real app, this would trigger an API call
-    notify("Transcript Request", { body: "Request submitted! Check email for details.", type: "success" });
+  const handleRequestTranscript = async () => {
+    notify("Transcript Download", { body: "Generating transcript PDF...", type: "info" });
+    try {
+      await downloadReport('transcript', 'pdf');
+      notify("Success", { body: "Transcript downloaded successfully.", type: "success" });
+    } catch (e) {
+      console.error(e);
+      notify("Error", { body: "Failed to download transcript.", type: "error" });
+    }
   };
 
-  const handleBookAppointment = (data) => {
-    // In real app, call API to book appointment
-    console.log("Appointment data:", data);
-    notify("Appointment Booked", { body: `Meeting with ${data.mentor} on ${data.date}`, type: "success" });
-    setShowAppointmentModal(false);
+  const handleBookAppointment = async (data) => {
+    try {
+        const toastId = notify("Appointment", { body: "Booking appointment...", type: "info" });
+        await api.post("/api/appointments", {
+            mentor_id: data.mentor,
+            date: data.date,
+            reason: data.reason
+        });
+        
+        notify("Appointment Booked", { body: `Meeting requested with ${data.mentor} on ${data.date}`, type: "success" });
+        setShowAppointmentModal(false);
+    } catch (err) {
+        console.error("Booking failed:", err);
+        notify("Booking Failed", { body: "Could not book appointment.", type: "error" });
+    }
   };
 
-  const handleDownloadCertificate = () => {
+  const handleDownloadCertificate = async () => {
     notify("Certificate Download", { body: "Generating certificate...", type: "info" });
+    try {
+      await downloadReport('certificate', 'pdf');
+      notify("Success", { body: "Certificate downloaded successfully.", type: "success" });
+    } catch (e) {
+      console.error(e);
+      notify("Error", { body: "Failed to calculate criteria for certificate or not eligible yet.", type: "error" });
+    }
   };
 
   const markNotificationAsRead = async (id) => {
@@ -450,16 +474,16 @@ export default function StudentDashboard() {
             </div>
             <div className="flex flex-col gap-3">
               <button
-                onClick={() => notify("Contact Mentor", { body: "Opening messaging interface...", type: "info" })}
+                onClick={() => {
+                  window.dispatchEvent(new CustomEvent('open-chat'));
+                  notify("Contact Mentor", { body: "Opening messaging interface...", type: "info" });
+                }}
                 className="px-4 py-2 bg-gradient-to-r from-emerald-500 to-teal-600 text-white rounded-xl hover:from-emerald-600 hover:to-teal-700 transition text-sm font-medium"
               >
                 Contact Mentor
               </button>
               <button
-                onClick={() => {
-                  setActiveTab("schedule");
-                  notify("Calendar", { body: "Redirected to Schedule tab", type: "info" });
-                }}
+                onClick={() => setShowCalendar(true)}
                 className={`px-4 py-2 rounded-xl text-sm font-medium transition ${darkMode ? 'bg-gray-700 hover:bg-gray-600' : 'bg-white hover:bg-slate-100 border border-slate-200'}`}
               >
                 View Calendar
@@ -669,7 +693,7 @@ export default function StudentDashboard() {
               icon={<CalendarDays className="w-5 h-5" />}
               color="purple"
               darkMode={darkMode}
-              onClick={() => alert("View academic calendar and important dates")}
+              onClick={() => setShowCalendar(true)}
             />
           </div>
         </div>
@@ -815,6 +839,14 @@ export default function StudentDashboard() {
         onClose={() => setShowAppointmentModal(false)}
         onBook={handleBookAppointment}
       />
+      
+      {showCalendar && (
+        <CalendarModal
+          isOpen={showCalendar}
+          onClose={() => setShowCalendar(false)}
+          darkMode={darkMode}
+        />
+      )}
     </div>
   );
 }
@@ -2610,10 +2642,10 @@ function StudentAcademicHistory({ darkMode }) {
                       </td>
                       <td className="py-2 px-3">
                         <button
-                          onClick={() => alert(`View detailed report for Semester ${h.semester}`)}
+                          onClick={() => downloadReport('transcript', 'pdf')}
                           className={`text-xs ${darkMode ? 'text-emerald-400 hover:text-emerald-300' : 'text-emerald-600 hover:text-emerald-700'}`}
                         >
-                          View Details
+                          Download Transcript
                         </button>
                       </td>
                     </tr>
