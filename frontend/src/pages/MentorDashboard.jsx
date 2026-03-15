@@ -87,7 +87,7 @@ import {
 import { getMentorMenteesPerformance } from "../services/mentorStats";
 import StudentPortfolio from "./StudentPortfolio";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 export default function MentorDashboard() {
   const { user, logout } = useAuth();
@@ -140,6 +140,9 @@ export default function MentorDashboard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [recentActivity, setRecentActivity] = useState([]);
   const [loadingActivity, setLoadingActivity] = useState(true);
+  const [activityPage, setActivityPage] = useState(1);
+  const ACTIVITY_PAGE_SIZE = 4;
+  const [totalActivityItems, setTotalActivityItems] = useState(0);
   const [darkMode, setDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('darkMode') === 'true';
@@ -153,45 +156,43 @@ export default function MentorDashboard() {
 
   const [dashboardOverview, setDashboardOverview] = useState(null);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoadingStats(true);
     try {
-      const [statsData, overviewData] = await Promise.all([
+      const [statsData, overviewData, notifs] = await Promise.all([
         getMentorStats(),
-        getMentorDashboardOverview()
+        getMentorDashboardOverview(),
+        getNotifications().catch(() => [])
       ]);
       setStats(statsData);
       setDashboardOverview(overviewData);
-
-      try {
-          const notifs = await getNotifications();
-          setNotifications(notifs || []);
-      } catch (err) {
-          console.error("Failed to load notifications", err);
-      }
+      setNotifications(notifs || []);
     } catch (e) {
       console.error("Failed to load mentor stats", e);
     } finally {
       setLoadingStats(false);
     }
     await loadActivity();
-  };
+  }, []);
 
   useEffect(() => {
     loadData();
   }, []);
 
-  const loadActivity = async () => {
+  const loadActivity = useCallback(async () => {
     try {
       setLoadingActivity(true);
-      const data = await getRecentActivity();
-      setRecentActivity(data || []);
+      const data = await getRecentActivity(50, 0);
+      const items = data || [];
+      setTotalActivityItems(items.length);
+      setRecentActivity(items);
+      setActivityPage(1);
     } catch (err) {
       console.error("Failed to load activity", err);
     } finally {
       setLoadingActivity(false);
     }
-  };
+  }, []);
 
   const formatTimeAgo = (dateString) => {
     const date = new Date(dateString);
@@ -580,36 +581,76 @@ export default function MentorDashboard() {
             </div>
           </div>
 
-          {/* Recent Activity Sidebar */}
+          {/* Recent Activity */}
           <div className={`rounded-2xl ${darkMode ? 'bg-gray-800' : 'bg-white'} shadow-lg p-6`}>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold">
-                Recent Activity
-              </h3>
-              <button className="text-sm text-teal-400 hover:text-teal-300">
-                View all
+              <h3 className="text-lg font-bold">Recent Activity</h3>
+              <button
+                onClick={loadActivity}
+                className={`p-1.5 rounded-lg transition ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-slate-100'}`}
+                title="Refresh"
+              >
+                <RefreshCw className="w-4 h-4" />
               </button>
             </div>
-            <div className="space-y-4">
-              {loadingActivity ? (
-                <div className="text-center py-4 opacity-50 text-sm">Loading activity...</div>
-              ) : recentActivity.length === 0 ? (
-                <div className="text-center py-4 opacity-50 text-sm">No recent activity</div>
-              ) : (
-                recentActivity.map((item, idx) => (
-                  <ActivityItem
-                    key={idx}
-                    title={item.title}
-                    time={new Date(item.time).toLocaleString(undefined, {
-                       month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
-                    })}
-                    student={item.user || "System"}
-                    type={item.type || 'info'}
-                    darkMode={darkMode}
-                  />
-                ))
-              )}
-            </div>
+            {loadingActivity ? (
+              <div className="text-center py-6">
+                <div className={`inline-block h-6 w-6 animate-spin rounded-full border-2 border-solid border-current border-r-transparent ${darkMode ? 'text-gray-600' : 'text-slate-300'}`} />
+                <p className="mt-2 text-xs opacity-75">Loading activity...</p>
+              </div>
+            ) : recentActivity.length === 0 ? (
+              <div className="text-center py-6 text-sm opacity-50">No recent activity</div>
+            ) : (
+              <>
+                <div className="space-y-1">
+                  {recentActivity
+                    .slice((activityPage - 1) * ACTIVITY_PAGE_SIZE, activityPage * ACTIVITY_PAGE_SIZE)
+                    .map((item, idx) => (
+                      <ActivityItem
+                        key={idx}
+                        title={item.title}
+                        time={new Date(item.time).toLocaleString(undefined, {
+                          month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+                        })}
+                        student={item.user || 'System'}
+                        type={item.type || 'info'}
+                        darkMode={darkMode}
+                      />
+                    ))}
+                </div>
+                {totalActivityItems > ACTIVITY_PAGE_SIZE && (
+                  <div className="flex items-center justify-between mt-4 pt-3 border-t border-gray-700/30">
+                    <span className="text-xs opacity-60">
+                      Page {activityPage} of {Math.ceil(totalActivityItems / ACTIVITY_PAGE_SIZE)}
+                    </span>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setActivityPage(p => Math.max(1, p - 1))}
+                        disabled={activityPage === 1}
+                        className={`px-3 py-1 text-xs rounded-lg transition border ${
+                          activityPage === 1
+                            ? 'opacity-40 cursor-not-allowed'
+                            : darkMode ? 'border-gray-600 hover:bg-gray-700' : 'border-slate-200 hover:bg-slate-50'
+                        }`}
+                      >
+                        Prev
+                      </button>
+                      <button
+                        onClick={() => setActivityPage(p => Math.min(Math.ceil(totalActivityItems / ACTIVITY_PAGE_SIZE), p + 1))}
+                        disabled={activityPage >= Math.ceil(totalActivityItems / ACTIVITY_PAGE_SIZE)}
+                        className={`px-3 py-1 text-xs rounded-lg transition border ${
+                          activityPage >= Math.ceil(totalActivityItems / ACTIVITY_PAGE_SIZE)
+                            ? 'opacity-40 cursor-not-allowed'
+                            : darkMode ? 'border-gray-600 hover:bg-gray-700' : 'border-slate-200 hover:bg-slate-50'
+                        }`}
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
       </main>
@@ -633,10 +674,7 @@ export default function MentorDashboard() {
               </button>
             </div>
           </div>
-          <div className="mt-4 text-center text-xs opacity-50">
-            <p>All mentor features are functional without backend changes</p>
-            <p>Mock data will be replaced by actual data when backend is connected</p>
-          </div>
+
         </div>
       </footer>
 

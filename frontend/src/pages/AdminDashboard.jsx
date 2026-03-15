@@ -81,7 +81,7 @@ import {
   Award,
 } from "lucide-react";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 export default function AdminDashboard() {
   const { user, logout } = useAuth();
@@ -97,10 +97,12 @@ export default function AdminDashboard() {
   const [showSystemModal, setShowSystemModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [dateRange, setDateRange] = useState("today");
-  const [recentActivity, setRecentActivity] = useState([]); // State for activity feed
-  const [loadingActivity, setLoadingActivity] = useState(true); // State for activity loading
-  const [hasMoreActivity, setHasMoreActivity] = useState(true); // Pagination state
-  const [refreshTrigger, setRefreshTrigger] = useState(0); // For forcing re-fetch in sub-components
+  const [recentActivity, setRecentActivity] = useState([]);
+  const [loadingActivity, setLoadingActivity] = useState(true);
+  const [activityPage, setActivityPage] = useState(1);
+  const ACTIVITY_PAGE_SIZE = 4;
+  const [totalActivityItems, setTotalActivityItems] = useState(0);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [darkMode, setDarkMode] = useState(() => {
     // Check localStorage for saved theme preference
     if (typeof window !== 'undefined') {
@@ -110,28 +112,18 @@ export default function AdminDashboard() {
   });
 
   useEffect(() => {
-    // Save dark mode preference
-// Remove the misplaced import
-// (It was inserted around line 105 in previous messy edit, but let's just make sure we add it to the top correctly first)
-
     async function load() {
       try {
-        const [statsData, deptStats, growthStats] = await Promise.all([
+        const [statsData, deptStats, growthStats, notifs] = await Promise.all([
             getAdminStats(),
             getStudentsByDepartment(),
-            getUserGrowth()
+            getUserGrowth(),
+            getNotifications().catch(() => [])
         ]);
         setStats(statsData);
         setDeptData(deptStats || []);
         setGrowthData(growthStats || []);
-        
-        // Load real notifications
-        try {
-            const notifs = await getNotifications();
-            setNotifications(notifs || []);
-        } catch (err) {
-            console.error("Failed to load notifications", err);
-        }
+        setNotifications(notifs || []);
       } catch (e) {
         console.error("Failed to load admin stats", e);
       } finally {
@@ -139,36 +131,26 @@ export default function AdminDashboard() {
       }
     }
     load();
-    loadActivity(true);
+    loadActivity(1);
   }, []);
 
 
 
-  const loadActivity = async (reset = false) => {
+  const loadActivity = useCallback(async (page = 1) => {
     try {
       setLoadingActivity(true);
-      const limit = 10;
-      const skip = reset ? 0 : recentActivity.length;
-      
-      const data = await getRecentActivity(limit, skip);
-      
-      if (!data || data.length < limit) {
-          setHasMoreActivity(false);
-      } else {
-          setHasMoreActivity(true);
-      }
-      
-      if (reset) {
-        setRecentActivity(data || []);
-      } else {
-        setRecentActivity(prev => [...prev, ...(data || [])]);
-      }
+      // Fetch enough to know total pages: fetch a large batch once, paginate client-side
+      const data = await getRecentActivity(50, 0);
+      const items = data || [];
+      setTotalActivityItems(items.length);
+      setRecentActivity(items);
+      setActivityPage(page);
     } catch (err) {
       console.error("Failed to load activity", err);
     } finally {
       setLoadingActivity(false);
     }
-  };
+  }, []);
 
   const markNotificationAsRead = async (id) => {
     try {
@@ -485,7 +467,7 @@ export default function AdminDashboard() {
                 Export Data
               </button>
               <button 
-                onClick={() => window.location.reload()}
+                onClick={() => { setRefreshTrigger(t => t + 1); loadActivity(1); }}
                 className="p-2 rounded-lg hover:bg-gray-700 transition"
                 title="Refresh"
               >
@@ -588,53 +570,73 @@ export default function AdminDashboard() {
             </div>
           </div>
 
-          {/* Recent Activity Sidebar */}
+          {/* Recent Activity */}
           <div className={`rounded-2xl ${darkMode ? 'bg-gray-800' : 'bg-white'} shadow-lg p-6`}>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold">
-                Recent Activity
-              </h3>
-              <button onClick={() => loadActivity(true)} className="text-sm text-indigo-400 hover:text-indigo-300">
+              <h3 className="text-lg font-bold">Recent Activity</h3>
+              <button onClick={() => loadActivity(1)} className={`p-1.5 rounded-lg transition ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-slate-100'}`} title="Refresh">
                 <RefreshCw className="w-4 h-4" />
               </button>
             </div>
-            <div className="space-y-4">
-              {loadingActivity ? (
-                <div className="text-center py-4">
-                   <div className={`inline-block h-6 w-6 animate-spin rounded-full border-2 border-solid border-current border-r-transparent align-[-0.125em] ${darkMode ? 'text-gray-600' : 'text-slate-300'}`} />
-                   <p className="mt-2 text-xs opacity-75">Loading activity...</p>
+            {loadingActivity ? (
+              <div className="text-center py-6">
+                <div className={`inline-block h-6 w-6 animate-spin rounded-full border-2 border-solid border-current border-r-transparent ${darkMode ? 'text-gray-600' : 'text-slate-300'}`} />
+                <p className="mt-2 text-xs opacity-75">Loading activity...</p>
+              </div>
+            ) : recentActivity.length === 0 ? (
+              <div className="text-center py-6 text-sm opacity-50">No recent activity found.</div>
+            ) : (
+              <>
+                <div className="space-y-1">
+                  {recentActivity
+                    .slice((activityPage - 1) * ACTIVITY_PAGE_SIZE, activityPage * ACTIVITY_PAGE_SIZE)
+                    .map((item, idx) => (
+                      <ActivityItem
+                        key={idx}
+                        title={item.title}
+                        time={new Date(item.time).toLocaleString(undefined, {
+                          month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+                        })}
+                        user={item.user || 'System'}
+                        type={item.type || 'system'}
+                        darkMode={darkMode}
+                      />
+                    ))}
                 </div>
-              ) : recentActivity.length === 0 ? (
-                <div className="text-center py-4 text-sm opacity-50">
-                  No recent activity found.
-                </div>
-              ) : (
-                recentActivity.map((item, idx) => (
-                  <ActivityItem
-                    key={idx}
-                    title={item.title}
-                    time={new Date(item.time).toLocaleString(undefined, {
-                      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
-                    })}
-                    user={item.user || "System"}
-                    type={item.type || 'system'}
-                    darkMode={darkMode}
-                  />
-                ))
-              )}
-              {hasMoreActivity && !loadingActivity && recentActivity.length > 0 && (
-                <button 
-                    onClick={() => loadActivity(false)}
-                    className={`w-full py-2 text-sm text-center border rounded-lg transition ${
-                        darkMode 
-                        ? 'border-gray-700 text-gray-400 hover:bg-gray-700 hover:text-white' 
-                        : 'border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-700'
-                    }`}
-                >
-                    Load More
-                </button>
-              )}
-            </div>
+                {/* Pagination */}
+                {totalActivityItems > ACTIVITY_PAGE_SIZE && (
+                  <div className="flex items-center justify-between mt-4 pt-3 border-t border-gray-700/30">
+                    <span className={`text-xs opacity-60`}>
+                      Page {activityPage} of {Math.ceil(totalActivityItems / ACTIVITY_PAGE_SIZE)}
+                    </span>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setActivityPage(p => Math.max(1, p - 1))}
+                        disabled={activityPage === 1}
+                        className={`px-3 py-1 text-xs rounded-lg transition border ${
+                          activityPage === 1
+                            ? 'opacity-40 cursor-not-allowed'
+                            : darkMode ? 'border-gray-600 hover:bg-gray-700' : 'border-slate-200 hover:bg-slate-50'
+                        }`}
+                      >
+                        Prev
+                      </button>
+                      <button
+                        onClick={() => setActivityPage(p => Math.min(Math.ceil(totalActivityItems / ACTIVITY_PAGE_SIZE), p + 1))}
+                        disabled={activityPage >= Math.ceil(totalActivityItems / ACTIVITY_PAGE_SIZE)}
+                        className={`px-3 py-1 text-xs rounded-lg transition border ${
+                          activityPage >= Math.ceil(totalActivityItems / ACTIVITY_PAGE_SIZE)
+                            ? 'opacity-40 cursor-not-allowed'
+                            : darkMode ? 'border-gray-600 hover:bg-gray-700' : 'border-slate-200 hover:bg-slate-50'
+                        }`}
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
       </main>
@@ -658,10 +660,7 @@ export default function AdminDashboard() {
               </button>
             </div>
           </div>
-          <div className="mt-4 text-center text-xs opacity-50">
-            <p>All frontend features are functional without backend changes</p>
-            <p>Mock data will be replaced by actual data when backend is connected</p>
-          </div>
+
         </div>
       </footer>
       
@@ -687,11 +686,10 @@ export default function AdminDashboard() {
 function OverviewTab({ darkMode, stats, deptData, growthData }) {
   const [timeFilter, setTimeFilter] = useState('month');
   
-  // Use real data or fallback
-  const userGrowthData = growthData && growthData.length > 0 ? growthData : [
-    { month: 'Jan', students: 0, mentors: 0 },
-    { month: 'Feb', students: 0, mentors: 0 }
-  ];
+  // Backend returns { name, students, mentors } — normalise to { month }
+  const userGrowthData = growthData && growthData.length > 0
+    ? growthData.map(d => ({ ...d, month: d.month || d.name || '' }))
+    : [{ month: 'No Data', students: 0, mentors: 0 }];
 
   const colors = ['#6366f1', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#06b6d4'];
   
@@ -800,9 +798,7 @@ function OverviewTab({ darkMode, stats, deptData, growthData }) {
               </AreaChart>
             </ResponsiveContainer>
           </div>
-          <div className="mt-4 text-sm opacity-75 text-center">
-            Chart shows user growth over time (mock data for demo)
-          </div>
+
         </div>
 
         <div className={`rounded-xl ${darkMode ? 'bg-gray-800' : 'bg-white'} p-5 border ${darkMode ? 'border-gray-700' : 'border-slate-200'} shadow-sm`}>
@@ -1473,10 +1469,10 @@ function AdminUsers({ darkMode, refreshTrigger }) {
               )}
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="overflow-auto" style={{ maxHeight: '420px' }}>
               <table className="min-w-full text-sm">
-                <thead>
-                  <tr className={`text-left border-b ${darkMode ? 'border-gray-700' : 'border-slate-200'}`}>
+                <thead className="sticky top-0 z-10">
+                  <tr className={`text-left border-b ${darkMode ? 'border-gray-700 bg-gray-800' : 'border-slate-200 bg-white'}`}>
                     <th className="py-3 pr-3">
                       <input
                         type="checkbox"
