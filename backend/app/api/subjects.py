@@ -68,6 +68,9 @@ async def create_subject(
     
     await log_action(current_user["id"], "CREATE", "subject", {"code": payload.code})
     
+    if "_id" in subject_data:
+        del subject_data["_id"]
+        
     return subject_data
 
 @router.put("/{subject_id}", response_model=SubjectResponse)

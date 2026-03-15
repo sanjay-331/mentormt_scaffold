@@ -1,4 +1,4 @@
-﻿from fastapi import APIRouter, Depends, HTTPException, status, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Body
 from datetime import timedelta
 from typing import Optional
 from app.db import db
@@ -31,8 +31,9 @@ async def register(payload: UserCreate):
 
     await db.users.insert_one(user_dict)
     
-    # Remove password hash before returning
+    # Remove sensitive and non-serializable fields before returning
     user_dict.pop("password_hash", None)
+    user_dict.pop("_id", None)
     
     await log_action(user_dict["id"], "REGISTER", "user", {"email": payload.email})
     

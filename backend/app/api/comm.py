@@ -222,6 +222,9 @@ async def create_rating(rating: Rating, current_user: dict = Depends(get_current
 
     await db.ratings.insert_one(rating_data)
     
+    if "_id" in rating_data:
+        del rating_data["_id"]
+        
     await log_action(current_user["id"], "CREATE", "rating", {"student_id": rating.student_id})
 
     return rating_data

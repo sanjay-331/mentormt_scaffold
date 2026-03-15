@@ -44,6 +44,8 @@ async def create_appointment(
     }
     
     await db.appointments.insert_one(appointment)
+    if "_id" in appointment:
+        del appointment["_id"]
     
     # Notify Mentor
     notif = {

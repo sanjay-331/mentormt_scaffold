@@ -43,7 +43,7 @@ export async function createUser(form) {
     password,
   });
 
-  const createdUser = registerRes.data.user;
+  const createdUser = registerRes.data;
 
   // Step 2: update optional fields (if any)
   const extra = {};

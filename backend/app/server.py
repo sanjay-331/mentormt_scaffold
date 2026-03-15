@@ -20,7 +20,7 @@ import app.sio_events # Register Socket.IO handlers
 from app.api.v1.routes import router as api_v1_router
 from app.core.config import settings
 
-ROOT_DIR = Path(__file__).parent
+ROOT_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT_DIR / ".env")
 
 # Initialize FastAPI app
@@ -31,10 +31,11 @@ app = FastAPI(
 )
 
 # Configure CORS
-origins = os.environ.get(
+origins_str = os.environ.get(
     "CORS_ORIGINS", 
     "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,https://mentormt-scaffold.vercel.app"
-).split(",")
+)
+origins = [origin.strip() for origin in origins_str.split(",") if origin.strip()]
 
 app.add_middleware(
     CORSMiddleware,
