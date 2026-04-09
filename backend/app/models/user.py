@@ -35,6 +35,7 @@ class User(UserBase):
     usn: Optional[str] = None  # For students
     employee_id: Optional[str] = None  # For mentors
     settings: Dict[str, Any] = Field(default_factory=dict)
+    password_hash: Optional[str] = None
     reset_token: Optional[str] = None
     reset_token_expiry: Optional[datetime] = None
 

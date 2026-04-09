@@ -16,7 +16,15 @@ class Settings(BaseSettings):
     MONGO_URL: str | None = Field(None, env="MONGO_URL")
     DB_NAME: str = Field("testdb", env="DB_NAME")
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    # JWT Settings
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 43200  # Default to 30 days
+
+    model_config = SettingsConfigDict(
+        env_file=".env", 
+        env_file_encoding="utf-8",
+        extra="ignore"
+    )
 
     @validator("CORS_ORIGINS", pre=True)
     @classmethod

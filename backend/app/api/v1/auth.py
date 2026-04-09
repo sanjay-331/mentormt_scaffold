@@ -62,7 +62,7 @@ async def login(
         raise HTTPException(status_code=401, detail="Incorrect email or password")
 
     # Check for both password_hash and legacy fields
-    password_hash = user.get("password_hash") or user.get("password")
+    password_hash = user.get("password_hash") or user.get("password") or user.get("hashed_password")
     
     if not password_hash or not verify_password(password, password_hash):
         raise HTTPException(status_code=401, detail="Incorrect email or password")

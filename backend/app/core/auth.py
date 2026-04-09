@@ -10,8 +10,8 @@ from app.core.config import settings
 
 # Security Constants
 SECRET_KEY = settings.JWT_SECRET_KEY or settings.SECRET_KEY
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 43200  # 30 days
+ALGORITHM = settings.ALGORITHM
+ACCESS_TOKEN_EXPIRE_MINUTES = settings.ACCESS_TOKEN_EXPIRE_MINUTES
 
 # Password Hashing
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
