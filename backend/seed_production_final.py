@@ -8,7 +8,7 @@ from passlib.context import CryptContext
 # Configuration
 # Note: Ensure IP is whitelisted on Atlas.
 MONGO_URL = "mongodb+srv://root:12345@cluster0.yoy9wjb.mongodb.net/?appName=Cluster0"
-DB_NAME = "testdb"
+DB_NAME = "mentormt_prod"
 COMMON_PASSWORD = "pass123"
 
 # Match backend's auth scheme: pbkdf2_sha256

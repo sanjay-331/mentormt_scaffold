@@ -38,24 +38,34 @@ async def create_assignment(
     existing = await db.assignments.find_one({"mentor_id": mentor_id})
     
     if existing:
+        updated_at = datetime.now(timezone.utc)
         await db.assignments.update_one(
             {"mentor_id": mentor_id},
-            {"$set": {"student_ids": student_ids, "updated_at": datetime.now(timezone.utc)}}
+            {"$set": {"student_ids": student_ids, "updated_at": updated_at}}
         )
-        assignment_data = {**existing, "student_ids": student_ids}
+        # Prepare response safely
+        assignment_data = {**existing, "student_ids": student_ids, "updated_at": updated_at}
+        assignment_data.pop("_id", None)
+        # Ensure dates are strings for consistent API response
+        if isinstance(assignment_data.get("created_at"), datetime):
+            assignment_data["created_at"] = assignment_data["created_at"].isoformat()
+        if isinstance(assignment_data.get("updated_at"), datetime):
+            assignment_data["updated_at"] = assignment_data["updated_at"].isoformat()
     else:
         assignment = MentorAssignment(mentor_id=mentor_id, student_ids=student_ids)
         assignment_data = assignment.model_dump()
-        assignment_data["created_at"] = assignment_data["created_at"].isoformat()
+        # Convert dates to ISO strings for the DB and response
+        if isinstance(assignment_data.get("created_at"), datetime):
+            assignment_data["created_at"] = assignment_data["created_at"].isoformat()
+        
         res = await db.assignments.insert_one(assignment_data)
         assignment_data["mongo_id"] = str(res.inserted_id)
-        if "_id" in assignment_data:
-            del assignment_data["_id"]
+        assignment_data.pop("_id", None)
 
-    # 3. Cleanup: Remove any assignments that are now empty (optional, but good for hygiene)
+    # 3. Cleanup: Remove any assignments that are now empty (optional)
     await db.assignments.delete_many({"student_ids": {"$size": 0}})
 
-    await log_action(current_user["id"], "CREATE", "assignment", {"mentor_id": mentor_id, "student_count": len(student_ids)})
+    await log_action(current_user["id"], "UPDATE_ASSIGNMENT", "assignment", {"mentor_id": mentor_id, "student_count": len(student_ids)})
 
     return assignment_data
 
